@@ -1,0 +1,26 @@
+# FI-08 Zero-Constants Parametric Ratchet for verdant-aqm
+
+[ratchet]
+zero_magic_literals = true
+pure_zero_one_lex_modules = [
+  "app/src/Tensor.lex.tex",
+  "app/src/Quantum.lex.tex",
+  "app/src/Engine.lex.tex",
+]
+guarded_runtime_modules = [
+  "src/aqm/stratum0.ts",
+  "src/aqm/prismKernel.ts",
+  "src/aqm/cyclotomic.ts",
+  "src/aqm/stabilizer.ts",
+  "src/aqm/tropical.ts",
+]
+
+[strata]
+s0_foundation = "Constructive {0, 1} pow2Constructive, BoundedBuffer(64/512), W5HCertificate"
+s1_tensor = "Cyclotomic Z[zeta_8]/2^k exact contractions, F_2 symplectic tableau, Tropical (min,+)/(max,+) lightcones"
+s2_dag = "Kahn acyclic circuit layer DAG validation and wire-collision barrier checks"
+s3_rollback = "SHA-256 DeterministicInputJournal, 64-frame Born-rule RollbackSession, #vdnt= URL snapshots"
+s4_streaming = "UORC-SHA256-CHAIN-v1 LOD0..LOD4 progressive quantum state frames and 2-of-3 Stitch XOR parity"
+s5_verifier = "hologram:guest/core-wasm@1 isolated Web Worker acceptance and planted-defect refusal gate"
+s6_spatial = "WebGL2 PBR + 16x16 Software Tile PBR 3D Bloch manifolds, surface-code QEC lattices, and causal lightcones"
+s7_cybernetics = "Q15 LIF CyberneticObserverLoop, 4-bit CodedSlmDirector with DenialWins guard, Euler-Bernoulli modal audio"

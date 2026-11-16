@@ -1,0 +1,6 @@
+{
+  "name": "Verdant AQM",
+  "description": "Prism-verified Abstract Quantum Machine executing exact cyclotomic state vectors, Gottesman-Knill stabilizer tableaus, tropical QEC decoding, journaled Born-rule rollback, progressive UORC streaming, and spatial 3D Bloch and surface-code visualization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

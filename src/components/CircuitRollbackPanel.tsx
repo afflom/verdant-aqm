@@ -1,0 +1,733 @@
+import React, { useState } from 'react';
+import { ExecutedRollbackSession } from '../aqm/journal';
+import { gateArity, gateIsClifford } from '../aqm/prismKernel';
+import { CANONICAL_CIRCUIT_PRESETS } from '../aqm/slm';
+import { computeBackwardLightcone } from '../aqm/tropical';
+import {
+  AqmBackendMode,
+  AqmCircuitSpec,
+  AqmGateStep,
+  ForcedCollapseBranch,
+  GateKind,
+  ModeledAqmError,
+} from '../aqm/types';
+
+interface CircuitRollbackPanelProps {
+  spec: AqmCircuitSpec;
+  session: ExecutedRollbackSession | null;
+  compileError: ModeledAqmError | null;
+  cursor: number;
+  selectedWire: number;
+  onUpdateSpec: (next: AqmCircuitSpec, nextCursor?: number) => void;
+  onSetCursor: (cursor: number) => void;
+  onSelectWire: (wire: number) => void;
+}
+
+const ALL_GATES: readonly GateKind[] = [
+  GateKind.H,
+  GateKind.S,
+  GateKind.T,
+  GateKind.X,
+  GateKind.Y,
+  GateKind.Z,
+  GateKind.CNOT,
+  GateKind.CZ,
+  GateKind.SWAP,
+  GateKind.MEASURE,
+];
+
+export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
+  spec,
+  session,
+  compileError,
+  cursor,
+  selectedWire,
+  onUpdateSpec,
+  onSetCursor,
+  onSelectWire,
+}) => {
+  const [newGate, setNewGate] = useState<GateKind>(GateKind.H);
+  const [wireA, setWireA] = useState<number>(0);
+  const [wireB, setWireB] = useState<number>(1);
+  const [branchChoice, setBranchChoice] = useState<ForcedCollapseBranch>('seeded');
+
+  const activeFrame =
+    session && session.frames.length > 0
+      ? session.frames[Math.min(cursor, session.frames.length - 1)]
+      : null;
+
+  const lightconeSet = session
+    ? computeBackwardLightcone(session.dagNodes, selectedWire, cursor)
+    : new Set<number>();
+
+  const handleAppendGate = (e: React.FormEvent) => {
+    e.preventDefault();
+    const arity = gateArity(newGate);
+    const targets = arity === 2 ? [wireA, wireB] : [wireA];
+    const nextStep: AqmGateStep = {
+      id: `step-${Date.now()}-${spec.steps.length}`,
+      kind: newGate,
+      targets,
+      branchMode: newGate === GateKind.MEASURE ? branchChoice : undefined,
+    };
+    const nextSteps = [...spec.steps, nextStep];
+    onUpdateSpec({ ...spec, steps: nextSteps }, nextSteps.length);
+  };
+
+  const handleRemoveStep = (idx: number) => {
+    const nextSteps = spec.steps.filter((_, i) => i !== idx);
+    onUpdateSpec({ ...spec, steps: nextSteps }, Math.min(cursor, nextSteps.length));
+  };
+
+  const handleChangeBranch = (stepIdx: number, mode: ForcedCollapseBranch) => {
+    const nextSteps = spec.steps.map((s, idx) =>
+      idx === stepIdx ? { ...s, branchMode: mode } : s,
+    );
+    onUpdateSpec({ ...spec, steps: nextSteps }, cursor);
+  };
+
+  const handleChangeQubits = (nextQubits: number) => {
+    const filteredSteps = spec.steps.filter((s) => s.targets.every((t) => t < nextQubits));
+    onUpdateSpec(
+      { ...spec, qubitCount: nextQubits, steps: filteredSteps },
+      Math.min(cursor, filteredSteps.length),
+    );
+    if (wireA >= nextQubits) setWireA(0);
+    if (wireB >= nextQubits) setWireB(Math.min(1, nextQubits - 1));
+  };
+
+  const handleSwitchBackend = (backend: AqmBackendMode) => {
+    onUpdateSpec({ ...spec, backend }, cursor);
+  };
+
+  const maxLayer = session ? Math.max(1, session.dagDepth) : Math.max(1, spec.steps.length);
+
+  return (
+    <div className="max-w-[1380px] mx-auto px-6 py-6 space-y-6">
+      {/* Preset & Register Control Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+            Circuit DAG Compiler & 64-Frame Rollback Journal
+          </h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            <span>{spec.qubitCount} Qubits</span>
+            <span className="mx-2" aria-hidden="true">·</span>
+            <span>{spec.backend === AqmBackendMode.CyclotomicExact ? 'Exact Z[ζ₈]/√2ᵏ Ring' : 'Gottesman-Knill F₂ Symplectic Tableau'}</span>
+            <span className="mx-2" aria-hidden="true">·</span>
+            <span>Kahn DAG Depth {maxLayer}</span>
+            <span className="mx-2" aria-hidden="true">·</span>
+            <span>Seed {spec.seed}</span>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300 dark:border-slate-800"
+            role="group"
+            aria-label="Execution backend"
+          >
+            <button
+              type="button"
+              onClick={() => handleSwitchBackend(AqmBackendMode.CyclotomicExact)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                spec.backend === AqmBackendMode.CyclotomicExact
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Exact Cyclotomic
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchBackend(AqmBackendMode.StabilizerTableau)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                spec.backend === AqmBackendMode.StabilizerTableau
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              F₂ Stabilizer Tableau
+            </button>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+            <span>Preset</span>
+            <select
+              aria-label="Load canonical quantum circuit preset"
+              value=""
+              onChange={(e) => {
+                const idx = Number(e.target.value);
+                if (!Number.isNaN(idx) && CANONICAL_CIRCUIT_PRESETS[idx]) {
+                  const preset = CANONICAL_CIRCUIT_PRESETS[idx];
+                  onUpdateSpec(preset, preset.steps.length);
+                }
+              }}
+              className="h-9 px-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-xs"
+            >
+              <option value="" disabled>
+                Select preset...
+              </option>
+              {CANONICAL_CIRCUIT_PRESETS.map((p, idx) => (
+                <option key={p.name} value={idx}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+            <span>Wires</span>
+            <select
+              aria-label="Register qubit width"
+              value={spec.qubitCount}
+              onChange={(e) => handleChangeQubits(Number(e.target.value))}
+              className="h-9 px-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-xs font-mono tabular-nums"
+            >
+              {[2, 3, 4, 5, 6].map((n) => (
+                <option key={n} value={n}>
+                  {n} qubits
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {/* Modeled Prism Refusal Alert if user composed an invalid instruction (e.g. CNOT(q0, q0) or T in Tableau mode) */}
+      {compileError && (
+        <div
+          role="alert"
+          className="p-4 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 flex flex-wrap items-center justify-between gap-4"
+        >
+          <div className="space-y-1">
+            <div className="text-sm font-semibold text-rose-800 dark:text-rose-200 font-mono">
+              ✖ {compileError.kind} · {compileError.refusalCode}
+            </div>
+            <p className="text-xs text-rose-700 dark:text-rose-300">{compileError.detail}</p>
+          </div>
+          {spec.steps.length > 0 && (
+            <button
+              type="button"
+              onClick={() => handleRemoveStep(spec.steps.length - 1)}
+              className="px-3.5 py-2 rounded-lg text-xs font-medium bg-rose-700 text-white hover:bg-rose-600 transition-colors whitespace-nowrap shrink-0"
+            >
+              Remove Offending Instruction
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left: Gate Composer + Rollback Transport + Interactive SVG Circuit */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* Gate Append Form */}
+          <form
+            onSubmit={handleAppendGate}
+            className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Append Gate Instruction
+              </h2>
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                Wire linearity & Kahn DAG checked on append
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="space-y-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                <span>Operator</span>
+                <select
+                  aria-label="Gate operator"
+                  value={newGate}
+                  onChange={(e) => setNewGate(e.target.value as GateKind)}
+                  className="block h-10 px-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs"
+                >
+                  {ALL_GATES.map((g) => (
+                    <option key={g} value={g}>
+                      {g} {!gateIsClifford(g) ? '(Clifford+T)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                <span>{gateArity(newGate) === 2 ? 'Control / Wire A' : 'Target Wire'}</span>
+                <select
+                  aria-label="Primary target wire"
+                  value={wireA}
+                  onChange={(e) => setWireA(Number(e.target.value))}
+                  className="block h-10 px-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs tabular-nums"
+                >
+                  {Array.from({ length: spec.qubitCount }, (_, i) => (
+                    <option key={i} value={i}>
+                      q{i}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {gateArity(newGate) === 2 && (
+                <label className="space-y-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <span>Target / Wire B</span>
+                  <select
+                    aria-label="Secondary target wire"
+                    value={wireB}
+                    onChange={(e) => setWireB(Number(e.target.value))}
+                    className="block h-10 px-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs tabular-nums"
+                  >
+                    {Array.from({ length: spec.qubitCount }, (_, i) => (
+                      <option key={i} value={i}>
+                        q{i}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {newGate === GateKind.MEASURE && (
+                <label className="space-y-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <span>Collapse Branch</span>
+                  <select
+                    aria-label="Measurement collapse branch mode"
+                    value={branchChoice}
+                    onChange={(e) => setBranchChoice(e.target.value as ForcedCollapseBranch)}
+                    className="block h-10 px-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-xs"
+                  >
+                    <option value="seeded">Seeded Born Draw</option>
+                    <option value="force0">Force Branch |0⟩</option>
+                    <option value="force1">Force Branch |1⟩</option>
+                  </select>
+                </label>
+              )}
+
+              <button
+                type="submit"
+                className="h-10 px-4 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0"
+              >
+                Append Gate
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateSpec({ ...spec, steps: [] }, 0)}
+                className="h-10 px-3.5 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+              >
+                Clear Circuit
+              </button>
+            </div>
+          </form>
+
+          {/* Interactive SVG Topological Circuit & Tropical Causal Lightcone Diagram */}
+          <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Topological Circuit & Tropical Causal Lightcone
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Click any wire label (q{selectedWire} active) to trace its backward (max, +) causal lightcone up to frame {cursor}.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onSetCursor(0)}
+                  disabled={cursor === 0}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 disabled:opacity-40 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
+                >
+                  Reset |0⟩⊗ⁿ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetCursor(Math.max(0, cursor - 1))}
+                  disabled={cursor === 0}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 disabled:opacity-40 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
+                >
+                  Step Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetCursor(Math.min(spec.steps.length, cursor + 1))}
+                  disabled={cursor >= spec.steps.length}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white disabled:opacity-40 hover:bg-emerald-500 whitespace-nowrap shrink-0"
+                >
+                  Step Forward
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetCursor(spec.steps.length)}
+                  disabled={cursor >= spec.steps.length}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 disabled:opacity-40 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
+                >
+                  Run All
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <svg
+                viewBox={`0 0 ${Math.max(580, 110 + spec.steps.length * 64)} ${spec.qubitCount * 48 + 32}`}
+                className="w-full min-w-[540px] h-auto"
+                role="img"
+                aria-label="Quantum circuit diagram with rollback cursor"
+              >
+                {/* Rollback Cursor Vertical Hairline */}
+                <line
+                  x1={74 + cursor * 64}
+                  y1={8}
+                  x2={74 + cursor * 64}
+                  y2={spec.qubitCount * 48 + 20}
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                />
+
+                {/* Qubit Wire Rails */}
+                {Array.from({ length: spec.qubitCount }, (_, q) => {
+                  const y = 32 + q * 48;
+                  const isSel = q === selectedWire;
+                  return (
+                    <g
+                      key={q}
+                      onClick={() => onSelectWire(q)}
+                      className="cursor-pointer"
+                    >
+                      <rect
+                        x={8}
+                        y={y - 14}
+                        width={52}
+                        height={28}
+                        rx={6}
+                        fill={isSel ? '#065f46' : '#1e293b'}
+                        stroke={isSel ? '#34d399' : '#334155'}
+                      />
+                      <text
+                        x={34}
+                        y={y + 4}
+                        textAnchor="middle"
+                        fill={isSel ? '#ecfdf5' : '#cbd5e1'}
+                        fontSize={12}
+                        fontFamily="IBM Plex Mono, monospace"
+                      >
+                        q{q} |0⟩
+                      </text>
+                      <line
+                        x1={60}
+                        y1={y}
+                        x2={Math.max(560, 96 + spec.steps.length * 64)}
+                        y2={y}
+                        stroke={isSel ? '#10b981' : '#475569'}
+                        strokeWidth={isSel ? 2 : 1.25}
+                      />
+                    </g>
+                  );
+                })}
+
+                {/* Gate Steps */}
+                {spec.steps.map((step, idx) => {
+                  const x = 106 + idx * 64;
+                  const executed = idx < cursor;
+                  const inCone = lightconeSet.has(idx);
+                  const w0 = step.targets[0] ?? 0;
+                  const y0 = 32 + Math.min(spec.qubitCount - 1, w0) * 48;
+                  const strokeCol =
+                    step.kind === GateKind.MEASURE
+                      ? '#f59e0b'
+                      : inCone
+                        ? '#34d399'
+                        : executed
+                          ? '#38bdf8'
+                          : '#64748b';
+                  const fillCol =
+                    step.kind === GateKind.MEASURE
+                      ? '#451a03'
+                      : inCone
+                        ? '#064e3b'
+                        : executed
+                          ? '#0c4a6e'
+                          : '#0f172a';
+
+                  if (step.targets.length === 2) {
+                    const w1 = step.targets[1] ?? 0;
+                    const y1 = 32 + Math.min(spec.qubitCount - 1, w1) * 48;
+                    return (
+                      <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
+                        <line x1={x} y1={y0} x2={x} y2={y1} stroke={strokeCol} strokeWidth={2.2} />
+                        <circle cx={x} cy={y0} r={6} fill={strokeCol} />
+                        <circle cx={x} cy={y1} r={14} fill={fillCol} stroke={strokeCol} strokeWidth={1.8} />
+                        <text
+                          x={x}
+                          y={y1 + 4}
+                          textAnchor="middle"
+                          fill="#f8fafc"
+                          fontSize={10}
+                          fontFamily="IBM Plex Mono, monospace"
+                        >
+                          {step.kind === GateKind.CNOT ? '⊕' : step.kind}
+                        </text>
+                      </g>
+                    );
+                  }
+
+                  return (
+                    <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
+                      <rect
+                        x={x - 18}
+                        y={y0 - 16}
+                        width={36}
+                        height={32}
+                        rx={6}
+                        fill={fillCol}
+                        stroke={strokeCol}
+                        strokeWidth={1.8}
+                      />
+                      <text
+                        x={x}
+                        y={y0 + 4}
+                        textAnchor="middle"
+                        fill="#f8fafc"
+                        fontSize={11}
+                        fontFamily="IBM Plex Mono, monospace"
+                      >
+                        {step.kind === GateKind.MEASURE ? 'M' : step.kind}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+
+            {/* Step List + Counterfactual Measurement Re-Branching */}
+            {spec.steps.length === 0 ? (
+              <p className="text-xs text-slate-500 py-2">
+                Circuit is empty (register in ground state |0⟩⊗ⁿ). Append a gate or pick a preset above.
+              </p>
+            ) : (
+              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  SHA-256 Journal Steps & Measurement Branch Controls
+                </div>
+                <div className="max-h-56 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-800/80">
+                  {spec.steps.map((step, idx) => {
+                    const jEntry = session?.journal[idx];
+                    const isActive = idx < cursor;
+                    return (
+                      <div
+                        key={step.id}
+                        className="py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="flex items-center gap-3 font-mono tabular-nums">
+                          <span className={isActive ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-slate-400'}>
+                            #{String(idx + 1).padStart(2, '0')}
+                          </span>
+                          <span className="text-slate-900 dark:text-slate-100 font-medium">
+                            {step.kind}({step.targets.map((w) => `q${w}`).join(', ')})
+                          </span>
+                          {jEntry?.measurement && (
+                            <span className="text-amber-600 dark:text-amber-400">
+                              → |{jEntry.measurement.outcome}⟩ (P₀={(jEntry.measurement.probZero * 100).toFixed(1)}%)
+                            </span>
+                          )}
+                          {jEntry && (
+                            <span className="text-slate-400 hidden sm:inline">
+                              sha256:{jEntry.chainDigest.slice(0, 10)}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {step.kind === GateKind.MEASURE && (
+                            <select
+                              aria-label={`Re-branch measurement outcome for step ${idx + 1}`}
+                              value={step.branchMode ?? 'seeded'}
+                              onChange={(e) =>
+                                handleChangeBranch(idx, e.target.value as ForcedCollapseBranch)
+                              }
+                              className="h-7 px-2 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100"
+                            >
+                              <option value="seeded">Seeded Draw</option>
+                              <option value="force0">Force |0⟩</option>
+                              <option value="force1">Force |1⟩</option>
+                            </select>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={`Jump to frame ${idx + 1}`}
+                            onClick={() => onSetCursor(idx + 1)}
+                            className="px-2 py-1 rounded text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete step ${idx + 1} ${step.kind}`}
+                            onClick={() => handleRemoveStep(idx)}
+                            className="px-2 py-1 rounded text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Exact State Vector / Stabilizer Tableau & k14 Conservation Telemetry */}
+        <div className="lg:col-span-5 space-y-6">
+          {/* k14 Conservation & MPS Bond Rank Readout */}
+          {activeFrame && (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  k14 Norm Conservation & MPS Ranks
+                </h2>
+                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+                  {activeFrame.conservation.normExactOne ? '● Exact Norm = 1' : '✖ Violated'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 pt-1">
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    Scaled Probability Mass
+                  </div>
+                  <div className="mt-0.5 text-lg font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                    {activeFrame.conservation.rationalNumerator} / {activeFrame.conservation.scaleDenominator}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    MPS Schmidt Bond χ
+                  </div>
+                  <div className="mt-0.5 text-lg font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                    [{activeFrame.cyclotomic?.mpsBondRanks.join(', ') || '1'}]
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">
+                Frame #{activeFrame.cursor} Chain Tip · {activeFrame.chainDigest}
+              </div>
+            </div>
+          )}
+
+          {/* Reduced Single-Qubit Bloch Coordinates */}
+          {activeFrame && (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Single-Qubit Reduced Bloch Coordinates
+              </h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                      <th className="py-1.5 pr-2">Wire</th>
+                      <th className="py-1.5 px-2">⟨X⟩</th>
+                      <th className="py-1.5 px-2">⟨Y⟩</th>
+                      <th className="py-1.5 px-2">⟨Z⟩</th>
+                      <th className="py-1.5 px-2">Purity</th>
+                      <th className="py-1.5 pl-2">P(|1⟩)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                    {activeFrame.blochVectors.map((bv) => (
+                      <tr
+                        key={bv.qubit}
+                        onClick={() => onSelectWire(bv.qubit)}
+                        className={`cursor-pointer ${
+                          bv.qubit === selectedWire
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
+                            : 'text-slate-800 dark:text-slate-200'
+                        }`}
+                      >
+                        <td className="py-1.5 pr-2 font-semibold">q{bv.qubit}</td>
+                        <td className="py-1.5 px-2">{(Math.abs(bv.rx) < 1e-9 ? 0 : bv.rx).toFixed(3)}</td>
+                        <td className="py-1.5 px-2">{(Math.abs(bv.ry) < 1e-9 ? 0 : bv.ry).toFixed(3)}</td>
+                        <td className="py-1.5 px-2">{(Math.abs(bv.rz) < 1e-9 ? 0 : bv.rz).toFixed(3)}</td>
+                        <td className="py-1.5 px-2">{bv.purity.toFixed(3)}</td>
+                        <td className="py-1.5 pl-2">{(bv.p1 * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Exact Cyclotomic Amplitudes or Stabilizer Generators */}
+          {activeFrame && spec.backend === AqmBackendMode.CyclotomicExact && (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Exact Z[ζ₈] Basis Amplitudes
+                </h2>
+                <span className="text-xs text-slate-500 font-mono tabular-nums">
+                  {activeFrame.basisAmplitudes.filter((a) => a.probability > 1e-9).length} non-zero / {activeFrame.basisAmplitudes.length}
+                </span>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                      <th className="py-1.5 pr-2">Basis</th>
+                      <th className="py-1.5 px-2">Exact Z[ζ₈]</th>
+                      <th className="py-1.5 px-2">Prob</th>
+                      <th className="py-1.5 pl-2">Phase</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                    {activeFrame.basisAmplitudes
+                      .filter((a) => a.probability > 1e-8)
+                      .map((amp) => (
+                        <tr key={amp.basisIndex} className="text-slate-800 dark:text-slate-200">
+                          <td className="py-1.5 pr-2 font-semibold">|{amp.bitstring}⟩</td>
+                          <td className="py-1.5 px-2 text-emerald-700 dark:text-emerald-400">
+                            {amp.exactFormula}
+                          </td>
+                          <td className="py-1.5 px-2">{(amp.probability * 100).toFixed(2)}%</td>
+                          <td className="py-1.5 pl-2">
+                            {((amp.phaseRad * 180) / Math.PI).toFixed(1)}°
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeFrame && spec.backend === AqmBackendMode.StabilizerTableau && (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Active F₂ Stabilizer Generators
+                </h2>
+                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+                  {activeFrame.stabilizersCommute ? '● Pairwise Commuting' : '✖ Anticommuting'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 font-mono text-xs tabular-nums">
+                {activeFrame.stabilizerGenerators.map((gen, idx) => (
+                  <div
+                    key={idx}
+                    className="px-3 py-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100"
+                  >
+                    S{idx}: {gen}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

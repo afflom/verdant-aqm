@@ -1,0 +1,12 @@
+[package]
+name = "verdant-aqm"
+version = "0.1.0"
+edition = "2024"
+description = "Prism-verified Abstract Quantum Machine over uor-matmul exact cyclotomic, symplectic F_2, and tropical semiring kernels."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/afflom/verdant-engine"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+verdant-tensor = { path = "../verdant-tensor" }
+verdant-core = { path = "../verdant-core" }

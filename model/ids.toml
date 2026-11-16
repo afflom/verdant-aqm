@@ -1,0 +1,81 @@
+# Verdant AQM Capability Register & Typed Failure Ledger (R1, R3, R5)
+
+[[capabilities]]
+id = "AQ-01"
+level = "build"
+suite = "aqm"
+statement = "Constructive Stratum 0 derives Hilbert dimensions 2^n, dyadic denominators, tile edges, and BoundedBuffer limits purely from {0, 1} with zero magic literals."
+failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
+negative = "aqm:defect:oob"
+
+[[capabilities]]
+id = "AQ-02"
+level = "build"
+suite = "aqm"
+statement = "Qubit wire linearity rejects out-of-bounds indices and duplicate multi-qubit wire references (no-cloning)."
+failure = "QuantumIsaError::DuplicateWireReference"
+negative = "aqm:defect:cloning"
+
+[[capabilities]]
+id = "AQ-03"
+level = "build"
+suite = "aqm"
+statement = "Kahn topological DAG scheduler validates acyclic gate dependencies and rejects cyclic wire hazards."
+failure = "QuantumIsaError::CyclicCircuitDag"
+negative = "aqm:defect:cyclic"
+
+[[capabilities]]
+id = "AQ-04"
+level = "build"
+suite = "aqm"
+statement = "Exact cyclotomic Z[zeta_8]/(sqrt(2))^k state-vector backend executes Clifford+T gates without floating-point drift and proves exact l2 norm conservation (k14)."
+failure = "UnitaryInvariantError::NormConservationViolated"
+negative = "aqm:defect:nonunitary"
+
+[[capabilities]]
+id = "AQ-05"
+level = "build"
+suite = "aqm"
+statement = "Gottesman-Knill F_2 binary symplectic tableau simulates Clifford circuits and surface-code stabilizers while refusing non-Clifford gates and anticommuting generators."
+failure = "StabilizerError::NonCliffordInTableauMode"
+negative = "aqm:defect:tableau-t"
+
+[[capabilities]]
+id = "AQ-06"
+level = "build"
+suite = "aqm"
+statement = "Tropical (min, +) and (max, +) semiring contractions compute circuit causal lightcones, MPS contraction orderings, and surface-code QEC syndrome recovery paths."
+failure = "StabilizerError::AnticommutingStabilizerGenerator"
+negative = "aqm:defect:anticommute"
+
+[[capabilities]]
+id = "AQ-07"
+level = "build"
+suite = "aqm"
+statement = "DeterministicInputJournal and 64-frame RollbackSession record Born-rule collapses in a SHA-256 chain, refuse unseeded or post-collapse invalid writes, and round-trip #vdnt= URLs."
+failure = "MeasurementJournalError::CollapsedRegisterWrite"
+negative = "aqm:defect:collapsed-write"
+
+[[capabilities]]
+id = "AQ-08"
+level = "build"
+suite = "aqm"
+statement = "Progressive UORC-SHA256-CHAIN-v1 packer streams LOD0 Bloch summaries through LOD4 lossless cyclotomic/tableau states and shards 2-of-3 Stitch XOR parity fragments."
+failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
+negative = "aqm:defect:uorc-tamper"
+
+[[capabilities]]
+id = "AQ-09"
+level = "build"
+suite = "aqm"
+statement = "CodedSlmDirector routes natural-language intents via 4-bit nibble zero-decode contractions and blocks invariant-violating proposals under DenialWins."
+failure = "UnitaryInvariantError::WireLinearityBroken"
+negative = "aqm:defect:slm-cloning"
+
+[[capabilities]]
+id = "AQ-10"
+level = "build"
+suite = "aqm"
+statement = "Spatial 3D Studio renders Bloch manifolds and rotated surface-code lattices identically across WebGL2 PBR and deterministic 16x16 software tile rasterization."
+failure = "TensorComputeError::InvalidTileDimensions"
+negative = "aqm:defect:tile-misaligned"

@@ -1,0 +1,213 @@
+\begin{lexlean}{Quantum}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.arch@1.0.0}
+\importmodule{Foundation.Ontology.V1.Model}
+\importmodule{Foundation.Bytes}
+\title{Verdant AQM constructive quantum ISA, cyclotomic norm conservation, and symplectic tableau invariants}
+
+\begin{semanticmodule}
+
+inductive{
+  name: GateKind,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: hadamard, fields: []},
+    {name: phaseS, fields: []},
+    {name: tGate, fields: []},
+    {name: pauliX, fields: []},
+    {name: pauliY, fields: []},
+    {name: pauliZ, fields: []},
+    {name: cnot, fields: []},
+    {name: cz, fields: []},
+    {name: swap, fields: []},
+    {name: measureZ, fields: []}
+  ]
+}
+
+inductive{
+  name: QuantumIsaError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: invalidQubitIndex, fields: []},
+    {name: duplicateWireReference, fields: []},
+    {name: cyclicCircuitDag, fields: []},
+    {name: payloadExceedsBoundedBuffer, fields: []}
+  ]
+}
+
+inductive{
+  name: UnitaryInvariantError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: nonUnitaryOperator, fields: []},
+    {name: normConservationViolated, fields: []},
+    {name: wireLinearityBroken, fields: []}
+  ]
+}
+
+inductive{
+  name: StabilizerError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: nonCliffordInTableauMode, fields: []},
+    {name: anticommutingStabilizerGenerator, fields: []}
+  ]
+}
+
+inductive{
+  name: MeasurementJournalError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: seedOrOutcomeMissing, fields: []},
+    {name: collapsedRegisterWrite, fields: []}
+  ]
+}
+
+definition{name: natOne, parameters: [], result: Nat, body: 1}
+definition{name: natTwo, parameters: [], result: Nat, body: (1 + 1)}
+definition{name: natThree, parameters: [], result: Nat, body: ((1 + 1) + 1)}
+definition{
+  name: natFour,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (natTwo))
+}
+definition{
+  name: natSix,
+  parameters: [],
+  result: Nat,
+  body: ((natTwo) * (natThree))
+}
+definition{
+  name: natEight,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (natThree))
+}
+definition{
+  name: natSixteen,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (natFour))
+}
+definition{
+  name: natSixtyFour,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (natSix))
+}
+definition{
+  name: natOneTwentyEight,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive ((natSix) + (natOne)))
+}
+
+structure{
+  name: QubitRegisterSpec,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: qubitCount, type: Nat},
+    {name: hilbertDim, type: Nat},
+    {name: dyadicScaleExp, type: Nat},
+    {name: accumBits, type: Nat},
+    {name: rollbackWindow, type: Nat}
+  ]
+}
+
+structure{
+  name: GateInstructionSpec,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: stepIndex, type: Nat},
+    {name: kind, type: GateKind},
+    {name: arity, type: Nat},
+    {name: primaryWire, type: Nat},
+    {name: secondaryWire, type: Nat},
+    {name: parentLayer, type: Nat},
+    {name: layerIndex, type: Nat}
+  ]
+}
+
+definition{
+  name: gateIsClifford,
+  parameters: [k : GateKind],
+  result: Bool,
+  body: (match k
+    | GateKind.tGate => false
+    | _ => true),
+  axioms: []
+}
+
+definition{
+  name: wiresDistinctAndBounded,
+  parameters: [inst : GateInstructionSpec, qubitCount : Nat],
+  result: Bool,
+  body: (if ((project inst arity) =? (natOne))
+    then ((project inst primaryWire) <? qubitCount)
+    else ((((project inst arity) =? (natTwo))
+      && ((project inst primaryWire) <? qubitCount))
+      && (((project inst secondaryWire) <? qubitCount)
+        && (not ((project inst primaryWire) =? (project inst secondaryWire)))))),
+  axioms: []
+}
+
+definition{
+  name: dagEdgeAcyclic,
+  parameters: [inst : GateInstructionSpec],
+  result: Bool,
+  body: ((project inst parentLayer) <? (project inst layerIndex)),
+  axioms: []
+}
+
+definition{
+  name: normConservedScaled,
+  parameters: [sumSqRationalPart : Nat, sumSqRootTwoPart : Nat, scaleDenom : Nat],
+  result: Bool,
+  body: (((0 <? scaleDenom) && (sumSqRationalPart =? scaleDenom)) && (sumSqRootTwoPart =? 0)),
+  axioms: []
+}
+
+definition{
+  name: symplecticInnerProductMod2,
+  parameters: [x1 : Bool, z1 : Bool, x2 : Bool, z2 : Bool],
+  result: Bool,
+  body: (not (((x1 && z2) != (z1 && x2)))),
+  axioms: []
+}
+
+theorem{
+  name: canonicalFourQubitRegisterValid,
+  statement: (((Foundation.Ontology.V1.Model::pow2Constructive (natFour)) = (natSixteen))
+    ∧ ((natOneTwentyEight) = ((natTwo) * (natSixtyFour)))),
+  proof: decide{},
+  axioms: []
+}
+
+theorem{
+  name: cloningCnotRefusedByLinearity,
+  statement: ((wiresDistinctAndBounded
+    (record GateInstructionSpec {
+      stepIndex := 0,
+      kind := GateKind.cnot,
+      arity := (natTwo),
+      primaryWire := 0,
+      secondaryWire := 0,
+      parentLayer := 0,
+      layerIndex := (natOne)
+    })
+    (natFour)) = false),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}
