@@ -47,6 +47,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
         shell: bash
@@ -129,7 +130,7 @@ jobs:
       - name: Assemble the page and content-addressed precache manifest
         shell: bash
         env:
-          VITE_BASE_PATH: "${{ steps.pages.outputs.base_path }}/"
+          VITE_BASE_PATH: "./"
           PAGES_BASE_URL: "${{ steps.pages.outputs.base_url }}/"
           HOLO: ${{ steps.holo.outputs.path }}
           FINGERPRINT: ${{ steps.holo.outputs.fingerprint }}
