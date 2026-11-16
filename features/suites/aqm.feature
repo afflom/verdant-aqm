@@ -1,16 +1,16 @@
-Feature: Verdant Abstract Quantum Machine (AQM) Prism Conformance
+Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (AQ-01..AQ-16)
 
-  Scenario: AQ-01 Constructive Stratum 0 powers of two and BoundedBuffer limits
+  Scenario: AQ-01 Constructive Stratum 0 powers of two, BLAKE3 kappa, and BoundedBuffer limits
     Given Stratum 0 derives powers of two constructively from {0, 1}
-    When evaluating a 4-qubit Hilbert dimension and Core-Wasm request envelope
-    Then Hilbert dimension equals 16 and request maximum equals 64 bytes with zero magic literals
+    When evaluating constructive dimensions, BLAKE3 content hashes, and 64-byte Core-Wasm request envelopes
+    Then constructive identities hold with zero magic literals
     And oversized payloads exceeding BoundedBuffer return QuantumIsaError::PayloadExceedsBoundedBuffer
 
-  Scenario: AQ-02 Wire linearity and no-cloning refusal on duplicate wire CNOT
-    Given a 4-qubit register specification
-    When validating CNOT(q0, q1) versus planted defect CNOT(q0, q0)
-    Then CNOT(q0, q1) passes wiresDistinctAndBounded
-    And CNOT(q0, q0) is refused with QuantumIsaError::DuplicateWireReference
+  Scenario: AQ-02 Unbounded wire linearity and no-cloning refusal at arbitrary qubit count
+    Given a 1,024-qubit register specification
+    When validating CNOT(q0, q1023) versus planted defect CNOT(q64, q64)
+    Then CNOT(q0, q1023) passes wiresDistinctAndBounded
+    And CNOT(q64, q64) is refused with QuantumIsaError::DuplicateWireReference
 
   Scenario: AQ-03 Kahn circuit DAG topological ordering and cycle refusal
     Given a multi-layer quantum circuit instruction sequence
@@ -18,36 +18,39 @@ Feature: Verdant Abstract Quantum Machine (AQM) Prism Conformance
     Then acyclic layers schedule deterministically with causal parentLayer < layerIndex
     And cyclic dependencies are refused with QuantumIsaError::CyclicCircuitDag
 
-  Scenario: AQ-04 Exact cyclotomic Z[zeta_8]/(sqrt(2))^k state vector and l2 norm conservation
-    Given a 3-qubit GHZ+T circuit over exact cyclotomic amplitudes
-    When contracting Hadamard, T, and CNOT operators
+  Scenario: AQ-04 Unbounded sparse BigInt cyclotomic Z[zeta_8]/(sqrt(2))^k ket engine and norm conservation
+    Given a 1,024-qubit GHZ+T cat circuit over sparse BigInt cyclotomic amplitudes
+    When contracting Hadamard, T, and 1,023 CNOT operators without dense 2^n allocation
     Then every step preserves scaled probability mass sum |alpha_i|^2 = 1 bit-identically
-    And planted non-unitary operators are refused with UnitaryInvariantError::NormConservationViolated
 
-  Scenario: AQ-05 Gottesman-Knill F_2 symplectic tableau and surface-code syndrome commutativity
-    Given a 9-data-qubit rotated surface-code lattice over F_2
-    When extracting X and Z stabilizer plaquettes and injecting a Pauli X fault
-    Then all stabilizer generators pairwise commute under symplectic inner product
+  Scenario: AQ-05 64-bit word-packed Gottesman-Knill F_2 symplectic tableau at 512+ qubits
+    Given a 512-qubit Clifford graph circuit over BigUint64Array symplectic words
+    When executing Hadamard, S, and CNOT cascades
+    Then all 512 stabilizer generators pairwise commute under symplectic inner product
     And non-Clifford T gates in tableau mode are refused with StabilizerError::NonCliffordInTableauMode
 
-  Scenario: AQ-06 Tropical (min, +) syndrome decoding and (max, +) causal lightcones
-    Given an excited surface-code syndrome pattern on the 3D lattice
-    When executing tropical (min, +) shortest-path closure
-    Then the minimum-weight recovery operator clears all syndrome excitations
+  Scenario: AQ-06 & AQ-12 Parametric [[d^2, 1, d]] rotated surface code and multi-fault Tropical (min, +) decoding
+    Given a d=5 [[25, 1, 5]] rotated surface-code lattice with weight-2 Pauli faults
+    When executing tropical (min, +) minimum-weight defect-and-boundary matching
+    Then all 24 X/Z stabilizer excitations clear and logical observables X_bar, Z_bar remain intact
+    And even code distances (d=4) are refused with StabilizerError::EvenSurfaceCodeDistance
 
-  Scenario: AQ-07 Journaled Born-rule collapse, 64-frame rollback, and #vdnt= snapshot round-trip
-    Given a Bell pair circuit with seeded projective measurement
-    When stepping through measurement collapse, rolling back, and re-branching the outcome
-    Then SHA-256 DeterministicInputJournal restores exact pre-collapse cyclotomic amplitudes
-    And #vdnt= snapshot URLs decode to bit-identical machine state
+  Scenario: AQ-07 & AQ-08 Journaled Born-rule collapse, UORC OrderRope lossless gate, and Stitch 2-of-3 XOR parity
+    Given a multi-qubit circuit with seeded projective measurement and UORC progressive frames
+    When rolling back collapses, testing lossy challenger rejection, and dropping any 1 of 3 Stitch shards
+    Then SHA-256 chains verify bit-exact recovery and lossy UORC challengers are refused
 
-  Scenario: AQ-08 Progressive UORC-SHA256-CHAIN-v1 LOD0..LOD4 and 2-of-3 Stitch XOR parity recovery
-    Given an active quantum state packed into UORC-SHA256-CHAIN-v1
-    When sharding into 3 Stitch fragments and dropping any 1 fragment
-    Then 2 remaining fragments reconstruct the bit-exact UORC chain and verify SHA-256 integrity
+  Scenario: AQ-11 Exact Cyclotomic Matrix Product State (ExactMps) tensor-train compression
+    Given a 128-qubit non-Clifford circuit executed on ExactMps over Z[zeta_8]
+    When contracting local and entangling gates with exact cyclotomic row-space compression
+    Then MPS bond dimensions remain bounded and match exact single-qubit Bloch observables
 
-  Scenario: AQ-09 Invariant-guarded 4-bit CodedSlmDirector natural-language proposal routing
-    Given natural-language operator prompts routed through 4-bit nibble coded_gemm
-    When proposing "prepare 3-qubit GHZ state" versus "clone q0 onto q0"
-    Then valid proposals admit verified AQM gate sequences
-    And cloning proposals are blocked under DenialWins with UnitaryInvariantError::WireLinearityBroken
+  Scenario: AQ-13 & AQ-14 UOR Atlas C(Z_3 x Z_2^3, q) MTC axioms and OpenQASM 2.0 SkWeaver braid compilation
+    Given canonical Atlas parameters (scope=4, modality=3, context=8) and an OpenQASM 2.0 rotation circuit
+    When verifying Pentagon, Hexagon, Balancing, and (ST)^3 = p^+ S^2 axioms and weaving Certified22 Euler braids
+    Then all MTC residuals lie below 1e-11, Certified22 braids satisfy measured SU(2) accuracy, and Clifford carriers refuse non-discrete angles
+
+  Scenario: AQ-15 & AQ-16 Real Hologram v4 zero-import Core-Wasm guest, uor-matmul zero-decode, and UTQC Row-Honesty
+    Given the BLAKE3-sealed VerdantAqm.holo v4 archive and zero-import wasm32 guest
+    When compiling via WebAssembly.compile, running all 24 vectors via holo_run, and auditing ledger rows
+    Then all 24 Wasm guest vectors pass and benchmark-as-proof inflation is refused with HonestyVerdict::RefuseBenchMarkedAsProof

@@ -4,9 +4,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   PauliFault,
-  SURFACE_CODE_DATA_COORDS,
-  SURFACE_CODE_PLAQUETTES,
+  buildRotatedSurfaceCode,
   extractSurfaceCodeSyndromes,
+  inferSurfaceCodeDistance,
 } from '../aqm/stabilizer';
 import {
   TileRasterTelemetry,
@@ -414,9 +414,12 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
       );
 
       if (p.sceneMode === 'bloch') {
-        const n = Math.max(1, p.blochVectors.length);
-        const spacing = Math.min(2.35, 9.6 / n);
+        const focusStart = p.blochVectors.length > 16 ? Math.max(0, Math.min(p.selectedWire - 8, p.blochVectors.length - 16)) : 0;
+        const visibleBloch = p.blochVectors.slice(focusStart, focusStart + 16);
+        const n = Math.max(1, visibleBloch.length);
+        const spacing = Math.min(2.35, 10.4 / n);
         const startX = -((n - 1) * spacing) * 0.5;
+        const stationScale = Math.min(1, 6 / Math.max(3, n));
         const sphereSegs = p.lod >= 3 ? 28 : p.lod >= 1 ? 18 : 12;
 
         const pedGeo = trackGeo(new THREE.CylinderGeometry(0.46, 0.56, 0.24, 8));
@@ -426,13 +429,15 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
         const poleCapGeo = trackGeo(new THREE.CylinderGeometry(0.06, 0.06, 0.08, 12));
         const shadowPlaneGeo = trackGeo(new THREE.PlaneGeometry(1.75, 1.75));
 
-        p.blochVectors.forEach((bv, idx) => {
-          const x = startX + idx * spacing;
-          const isSelected = idx === p.selectedWire;
+        visibleBloch.forEach((bv, localIdx) => {
+          const globalWire = bv.qubit;
+          const x = startX + localIdx * spacing;
+          const isSelected = globalWire === p.selectedWire;
 
           // Composite 8-part Bloch Manifold Station Group
           const station = new THREE.Group();
-          station.position.set(x, 0, 0.2);
+          station.position.set(x, -1.385 * (1 - stationScale), 0.2);
+          station.scale.setScalar(stationScale);
 
           // 1. Contact shadow disc on bench surface (y = -1.39, above -1.40 bench top)
           const cShadow = new THREE.Mesh(shadowPlaneGeo, shadowPlaneMat);
@@ -510,7 +515,7 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           );
           const shell = new THREE.Mesh(shellGeo, shellMat);
           shell.renderOrder = 4;
-          shell.userData = { kind: 'wire', index: idx };
+          shell.userData = { kind: 'wire', index: globalWire };
           interactables.push(shell);
           station.add(shell);
 
@@ -580,16 +585,19 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
         // Entanglement mutual-information arches (LOD >= 1)
         if (p.lod >= 1) {
           for (const edge of p.entanglementEdges) {
-            const xA = startX + edge.qubitA * spacing;
-            const xB = startX + edge.qubitB * spacing;
+            const locA = edge.qubitA - focusStart;
+            const locB = edge.qubitB - focusStart;
+            if (locA < 0 || locA >= n || locB < 0 || locB >= n) continue;
+            const xA = startX + locA * spacing;
+            const xB = startX + locB * spacing;
             const span = Math.abs(xB - xA);
             const curve = new THREE.QuadraticBezierCurve3(
-              new THREE.Vector3(xA, 0.88, 0.2),
-              new THREE.Vector3((xA + xB) * 0.5, 1.15 + span * 0.22, -0.25),
-              new THREE.Vector3(xB, 0.88, 0.2),
+              new THREE.Vector3(xA, 0.88 * stationScale, 0.2),
+              new THREE.Vector3((xA + xB) * 0.5, 1.15 * stationScale + span * 0.2, -0.25),
+              new THREE.Vector3(xB, 0.88 * stationScale, 0.2),
             );
             const tubeGeo = trackGeo(
-              new THREE.TubeGeometry(curve, 24, 0.022 + edge.correlationStrength * 0.025, 8, false),
+              new THREE.TubeGeometry(curve, 24, 0.02 + edge.correlationStrength * 0.022, 8, false),
             );
             const tubeMat = trackMat(
               new THREE.MeshStandardMaterial({
@@ -644,15 +652,18 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           }
         }
       } else if (p.sceneMode === 'surface-code') {
-        // 3D Rotated [[9, 1, 3]] Topological Surface-Code Cryo-Lattice
-        const syn = extractSurfaceCodeSyndromes(p.surfaceFaults);
-        const gridScale = 1.65;
+        // Parametric [[d^2, 1, d]] Topological Surface-Code Cryo-Lattice (d = 3, 5, 7, 9)
+        const d = inferSurfaceCodeDistance(p.surfaceFaults.length);
+        const patch = buildRotatedSurfaceCode(d);
+        const syn = extractSurfaceCodeSyndromes(p.surfaceFaults, d);
+        const ratio = 3 / d;
+        const gridScale = 1.65 * ratio;
 
-        const plaqGeo = trackGeo(new THREE.BoxGeometry(1.42, 0.14, 1.42));
-        const halfPlaqGeo = trackGeo(new THREE.BoxGeometry(1.25, 0.12, 0.72));
-        const beaconGeo = trackGeo(new THREE.OctahedronGeometry(0.18, 0));
+        const plaqGeo = trackGeo(new THREE.BoxGeometry(1.42 * ratio, 0.14, 1.42 * ratio));
+        const halfPlaqGeo = trackGeo(new THREE.BoxGeometry(1.25 * ratio, 0.12, 0.72 * ratio));
+        const beaconGeo = trackGeo(new THREE.OctahedronGeometry(0.18 * ratio, 0));
 
-        for (const plaq of SURFACE_CODE_PLAQUETTES) {
+        for (const plaq of patch.plaquettes) {
           const isExcited = syn.excitedIds.includes(plaq.id);
           const isWeight2 = plaq.dataQubits.length === 2;
           const baseColor = plaq.kind === 'X' ? 0x0e7490 : 0x047857;
@@ -671,7 +682,10 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
             }),
           );
           const tileMesh = new THREE.Mesh(isWeight2 ? halfPlaqGeo : plaqGeo, tileMat);
-          if (isWeight2 && (plaq.id === 'Z0' || plaq.id === 'Z3')) {
+          if (
+            isWeight2 &&
+            (plaq.boundaryOrientation === 'left' || plaq.boundaryOrientation === 'right')
+          ) {
             tileMesh.rotation.y = Math.PI * 0.5;
           }
           if (isExcited) {
@@ -688,13 +702,17 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           dynamicRoot.add(pGroup);
         }
 
-        // 9 Composite Data-Qubit Cryo-Pillars (clickable to cycle I -> X -> Z -> Y)
-        const pillarBaseGeo = trackGeo(new THREE.CylinderGeometry(0.24, 0.3, 0.22, 8));
-        const pillarColGeo = trackGeo(new THREE.CylinderGeometry(0.11, 0.13, 0.68, 14));
-        const orbGeo = trackGeo(new THREE.SphereGeometry(0.22, 20, 20));
-        const collarGeo = trackGeo(new THREE.TorusGeometry(0.24, 0.025, 10, 24));
+        // d^2 Composite Data-Qubit Cryo-Pillars (clickable to cycle I -> X -> Z -> Y)
+        const pillarBaseGeo = trackGeo(
+          new THREE.CylinderGeometry(0.24 * ratio, 0.3 * ratio, 0.22, 8),
+        );
+        const pillarColGeo = trackGeo(
+          new THREE.CylinderGeometry(0.11 * ratio, 0.13 * ratio, 0.68, 12),
+        );
+        const orbGeo = trackGeo(new THREE.SphereGeometry(0.22 * ratio, 16, 16));
+        const collarGeo = trackGeo(new THREE.TorusGeometry(0.24 * ratio, 0.025 * ratio, 8, 20));
 
-        for (const dq of SURFACE_CODE_DATA_COORDS) {
+        for (const dq of patch.dataCoords) {
           const fault = p.surfaceFaults[dq.id] ?? 'I';
           const orbHex =
             fault === 'I'
@@ -741,10 +759,10 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
 
         // Tropical (min, +) decoded recovery arches
         for (const edge of p.decodedEdges) {
-          const dq = SURFACE_CODE_DATA_COORDS[edge.dataQubit];
+          const dq = patch.dataCoords[edge.dataQubit];
           if (!dq) continue;
           const ringHighlight = new THREE.Mesh(
-            trackGeo(new THREE.TorusGeometry(0.36, 0.04, 10, 28)),
+            trackGeo(new THREE.TorusGeometry(0.36 * ratio, 0.04 * ratio, 10, 24)),
             trackMat(
               new THREE.MeshStandardMaterial({
                 color: 0x10b981,
@@ -760,21 +778,26 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           dynamicRoot.add(ringHighlight);
         }
       } else {
-        // 3D Causal Circuit DAG & Tropical Lightcone Sculpture
-        const n = Math.max(1, p.blochVectors.length);
+        // 3D Causal Circuit DAG & Tropical Lightcone Sculpture (16-wire focus window)
+        const totalWires = Math.max(1, p.blochVectors.length);
+        const focusStart =
+          totalWires > 16 ? Math.max(0, Math.min(p.selectedWire - 8, totalWires - 16)) : 0;
+        const n = Math.min(16, totalWires - focusStart);
         const coneSet = computeBackwardLightcone(p.dagNodes, p.selectedWire, p.stepCursor);
         const wireSpacingZ = Math.min(1.25, 5.2 / n);
         const startZ = -((n - 1) * wireSpacingZ) * 0.5;
-        const maxLayer = Math.max(1, ...p.dagNodes.map((nd) => nd.layerIndex));
+        const visibleNodes = p.dagNodes.slice(0, 48);
+        const maxLayer = Math.max(1, ...visibleNodes.map((nd) => nd.layerIndex));
         const layerSpacingX = Math.min(1.3, 8.8 / Math.max(1, maxLayer));
         const startX = -((maxLayer - 1) * layerSpacingX) * 0.5;
 
         const railGeo = trackGeo(new THREE.CylinderGeometry(0.035, 0.035, 10.2, 12));
-        for (let q = 0; q < n; q += 1) {
-          const z = startZ + q * wireSpacingZ;
+        for (let localQ = 0; localQ < n; localQ += 1) {
+          const globalQ = focusStart + localQ;
+          const z = startZ + localQ * wireSpacingZ;
           const rail = new THREE.Mesh(
             railGeo,
-            q === p.selectedWire
+            globalQ === p.selectedWire
               ? trackMat(
                   new THREE.MeshStandardMaterial({
                     color: 0x10b981,
@@ -788,13 +811,19 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           );
           rail.rotation.z = Math.PI * 0.5;
           rail.position.set(0, -0.35, z);
-          rail.userData = { kind: 'wire', index: q };
+          rail.userData = { kind: 'wire', index: globalQ };
           interactables.push(rail);
           dynamicRoot.add(rail);
         }
 
         const gateBoxGeo = trackGeo(new THREE.BoxGeometry(0.56, 0.56, 0.56));
-        for (const node of p.dagNodes) {
+        for (const node of visibleNodes) {
+          const w0 = node.step.targets[0];
+          const in0 = w0 >= focusStart && w0 < focusStart + n;
+          const w1 = node.step.targets.length === 2 ? node.step.targets[1] : w0;
+          const in1 = w1 >= focusStart && w1 < focusStart + n;
+          if (!in0 && !in1) continue;
+
           const x = startX + (node.layerIndex - 1) * layerSpacingX;
           const inCone = coneSet.has(node.stepIndex);
           const executed = node.stepIndex < p.stepCursor;
@@ -817,30 +846,34 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
             }),
           );
 
-          const w0 = node.step.targets[0];
-          const z0 = startZ + w0 * wireSpacingZ;
-          const block = new THREE.Mesh(gateBoxGeo, gMat);
-          block.position.set(x, -0.35, z0);
-          dynamicRoot.add(block);
+          const z0 = startZ + Math.max(0, Math.min(n - 1, w0 - focusStart)) * wireSpacingZ;
+          if (in0) {
+            const block = new THREE.Mesh(gateBoxGeo, gMat);
+            block.position.set(x, -0.35, z0);
+            dynamicRoot.add(block);
+          }
 
           if (node.step.targets.length === 2) {
-            const w1 = node.step.targets[1];
-            const z1 = startZ + w1 * wireSpacingZ;
-            const targetSphere = new THREE.Mesh(
-              trackGeo(new THREE.SphereGeometry(0.24, 16, 16)),
-              gMat,
-            );
-            targetSphere.position.set(x, -0.35, z1);
-            dynamicRoot.add(targetSphere);
+            const z1 = startZ + Math.max(0, Math.min(n - 1, w1 - focusStart)) * wireSpacingZ;
+            if (in1) {
+              const targetSphere = new THREE.Mesh(
+                trackGeo(new THREE.SphereGeometry(0.24, 16, 16)),
+                gMat,
+              );
+              targetSphere.position.set(x, -0.35, z1);
+              dynamicRoot.add(targetSphere);
+            }
 
             const couplerLen = Math.abs(z1 - z0);
-            const coupler = new THREE.Mesh(
-              trackGeo(new THREE.CylinderGeometry(0.05, 0.05, couplerLen, 10)),
-              gMat,
-            );
-            coupler.rotation.x = Math.PI * 0.5;
-            coupler.position.set(x, -0.35, (z0 + z1) * 0.5);
-            dynamicRoot.add(coupler);
+            if (couplerLen > 0.01) {
+              const coupler = new THREE.Mesh(
+                trackGeo(new THREE.CylinderGeometry(0.05, 0.05, couplerLen, 10)),
+                gMat,
+              );
+              coupler.rotation.x = Math.PI * 0.5;
+              coupler.position.set(x, -0.35, (z0 + z1) * 0.5);
+              dynamicRoot.add(coupler);
+            }
           }
         }
       }

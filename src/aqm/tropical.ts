@@ -1,22 +1,18 @@
 /**
  * Stratum 1C — Tropical Semiring `(min, +)` & `(max, +)` Kernels (`tropical.ts`)
  * Repurposes verdant-tensor kernels k2, k7, k12 for:
- *  1. All-pairs shortest syndrome-decoding paths on the surface-code dual graph via `(min, +)` matrix squaring.
- *  2. Minimum-weight matching recovery for rotated d=3 surface-code X/Z syndromes.
+ *  1. All-pairs shortest syndrome-decoding paths on parametric `[[d^2, 1, d]]` surface-code dual graphs (`k7`).
+ *  2. Minimum-weight matching recovery for arbitrary odd code distances d = 3, 5, 7, 9+.
  *  3. Backward `(max, +)` causal lightcone extraction across compiled circuit DAGs.
  */
 
-import {
-  NINE,
-  ONE,
-  SURFACE_CODE_PLAQUETTES_COUNT_HALF,
-  ZERO,
-  extractSyndromesHelper,
-} from './tropicalHelpers';
+import { ONE, ZERO, extractSyndromesHelper } from './tropicalHelpers';
 import {
   PauliFault,
-  SURFACE_CODE_PLAQUETTES,
+  StabilizerPlaquetteSpec,
+  buildRotatedSurfaceCode,
   extractSurfaceCodeSyndromes,
+  inferSurfaceCodeDistance,
 } from './stabilizer';
 import { CompiledDagNode } from './types';
 
@@ -74,6 +70,7 @@ export function tropicalMinPlusClosureWithPaths(
 }
 
 export interface TropicalSyndromeDecodeResult {
+  readonly distance: number;
   readonly recoveryFaults: PauliFault[];
   readonly residualFaults: PauliFault[];
   readonly matchedEdges: ReadonlyArray<{
@@ -89,24 +86,29 @@ export interface TropicalSyndromeDecodeResult {
 
 /**
  * Decodes X-faults (from Z-plaquette syndromes) and Z-faults (from X-plaquette syndromes)
+ * on any odd-distance `[[d^2, 1, d]]` rotated surface code (`d = 3, 5, 7, 9+`)
  * using Tropical (min, +) dual-lattice shortest paths & minimum-weight pairing.
  */
 export function decodeSurfaceCodeTropical(
   currentFaults: readonly PauliFault[],
+  explicitDistance?: number,
 ): TropicalSyndromeDecodeResult {
-  const syn = extractSurfaceCodeSyndromes(currentFaults);
-  const zPlaqs = SURFACE_CODE_PLAQUETTES.filter((p) => p.kind === 'Z');
-  const xPlaqs = SURFACE_CODE_PLAQUETTES.filter((p) => p.kind === 'X');
+  const d = inferSurfaceCodeDistance(currentFaults.length, explicitDistance);
+  const patch = buildRotatedSurfaceCode(d);
+  const dataCount = patch.dataQubitCount;
+  const syn = extractSurfaceCodeSyndromes(currentFaults, d);
 
-  // Dual graph for Z-plaquettes (nodes 0..3 = Z0..Z3, node 4 = Boundary)
-  const boundaryIdx = SURFACE_CODE_PLAQUETTES_COUNT_HALF;
-  const nodeCount = boundaryIdx + ONE;
+  const zPlaqs = patch.plaquettes.filter((p) => p.kind === 'Z');
+  const xPlaqs = patch.plaquettes.filter((p) => p.kind === 'X');
 
   const decodeSector = (
-    plaqs: typeof zPlaqs,
+    plaqs: readonly StabilizerPlaquetteSpec[],
     excitedFlags: readonly boolean[],
     corrLabel: 'X-correction' | 'Z-correction',
   ) => {
+    const boundaryIdx = plaqs.length;
+    const nodeCount = boundaryIdx + ONE;
+
     const weights = new Int32Array(nodeCount * nodeCount).fill(TROPICAL_INF);
     const edgeQubit = new Int32Array(nodeCount * nodeCount).fill(-ONE);
     const nextHopInit = new Int32Array(nodeCount * nodeCount).fill(-ONE);
@@ -116,10 +118,8 @@ export function decodeSurfaceCodeTropical(
       nextHopInit[i * nodeCount + i] = i;
     }
 
-    // Each data qubit q=0..8 touches 1 or 2 plaquettes of this type:
-    // - If 2 plaquettes (u, v): dual edge (u, v) of weight 1 labelled by q
-    // - If 1 plaquette (u): boundary edge (u, Boundary) of weight 1 labelled by q
-    for (let q = ZERO; q < NINE; q += ONE) {
+    // Each data qubit q in 0..d^2-1 touches 2 plaquettes (interior dual edge) or 1 plaquette (rough/smooth boundary edge)
+    for (let q = ZERO; q < dataCount; q += ONE) {
       const touching: number[] = [];
       for (let pIdx = ZERO; pIdx < plaqs.length; pIdx += ONE) {
         if (plaqs[pIdx].dataQubits.includes(q)) {
@@ -157,9 +157,8 @@ export function decodeSurfaceCodeTropical(
       if (excitedFlags[i]) defects.push(i);
     }
 
-    // Exact minimum-weight matching over the <= 4 excited defects (pairing with each other or Boundary)
     const bestPairings = extractSyndromesHelper(defects, boundaryIdx, dist, nodeCount);
-    const flippedQubits = new Uint8Array(NINE);
+    const flippedQubits = new Uint8Array(dataCount);
     const edgesUsed: Array<{
       kind: 'X-correction' | 'Z-correction';
       fromId: string;
@@ -189,9 +188,7 @@ export function decodeSurfaceCodeTropical(
     return { flippedQubits, edgesUsed, cost: bestPairings.cost };
   };
 
-  // Z-syndromes detect X-errors -> X-correction
   const xDecode = decodeSector(zPlaqs, syn.zSyndromes, 'X-correction');
-  // X-syndromes detect Z-errors -> Z-correction
   const zDecode = decodeSector(xPlaqs, syn.xSyndromes, 'Z-correction');
 
   const composePauli = (a: PauliFault, b: PauliFault): PauliFault => {
@@ -207,19 +204,20 @@ export function decodeSurfaceCodeTropical(
     return 'Y';
   };
 
-  const recoveryFaults: PauliFault[] = new Array(NINE);
-  const residualFaults: PauliFault[] = new Array(NINE);
-  for (let q = ZERO; q < NINE; q += ONE) {
+  const recoveryFaults: PauliFault[] = new Array(dataCount);
+  const residualFaults: PauliFault[] = new Array(dataCount);
+  for (let q = ZERO; q < dataCount; q += ONE) {
     const rx = xDecode.flippedQubits[q];
     const rz = zDecode.flippedQubits[q];
     const rec: PauliFault =
       rx === ZERO && rz === ZERO ? 'I' : rx === ONE && rz === ZERO ? 'X' : rx === ZERO ? 'Z' : 'Y';
     recoveryFaults[q] = rec;
-    residualFaults[q] = composePauli(currentFaults[q], rec);
+    residualFaults[q] = composePauli(currentFaults[q] ?? 'I', rec);
   }
 
-  const postSyn = extractSurfaceCodeSyndromes(residualFaults);
+  const postSyn = extractSurfaceCodeSyndromes(residualFaults, d);
   return {
+    distance: d,
     recoveryFaults,
     residualFaults,
     matchedEdges: [...xDecode.edgesUsed, ...zDecode.edgesUsed],

@@ -36,6 +36,15 @@ const ALL_GATES: readonly GateKind[] = [
   GateKind.MEASURE,
 ];
 
+const BACKEND_LABELS: Record<AqmBackendMode, string> = {
+  [AqmBackendMode.CyclotomicExact]: 'Sparse Z[ζ₈]',
+  [AqmBackendMode.ExactMps]: 'Exact MPS Q(ζ₈)',
+  [AqmBackendMode.StabilizerTableau]: '64-Bit F₂ Tableau',
+  [AqmBackendMode.AtlasHolospace]: 'Atlas Braid',
+};
+
+const STANDARD_WIRE_COUNTS = [2, 3, 4, 6, 12, 32, 64, 96, 128];
+
 export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
   spec,
   session,
@@ -50,6 +59,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
   const [wireA, setWireA] = useState<number>(0);
   const [wireB, setWireB] = useState<number>(1);
   const [branchChoice, setBranchChoice] = useState<ForcedCollapseBranch>('seeded');
+  const [wireWindowStart, setWireWindowStart] = useState<number>(0);
 
   const activeFrame =
     session && session.frames.length > 0
@@ -94,6 +104,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
     );
     if (wireA >= nextQubits) setWireA(0);
     if (wireB >= nextQubits) setWireB(Math.min(1, nextQubits - 1));
+    setWireWindowStart(0);
   };
 
   const handleSwitchBackend = (backend: AqmBackendMode) => {
@@ -101,6 +112,18 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
   };
 
   const maxLayer = session ? Math.max(1, session.dagDepth) : Math.max(1, spec.steps.length);
+  const wireOptions = STANDARD_WIRE_COUNTS.includes(spec.qubitCount)
+    ? STANDARD_WIRE_COUNTS
+    : [...STANDARD_WIRE_COUNTS, spec.qubitCount].sort((a, b) => a - b);
+
+  // Paginated 16-wire focus window for large-scale registers
+  const visibleWireCap = 16;
+  const clampedStart = Math.max(
+    0,
+    Math.min(wireWindowStart, Math.max(0, spec.qubitCount - visibleWireCap)),
+  );
+  const visibleWireCount = Math.min(visibleWireCap, spec.qubitCount - clampedStart);
+  const visibleStepsCap = Math.min(spec.steps.length, 48);
 
   return (
     <div className="max-w-[1380px] mx-auto px-6 py-6 space-y-6">
@@ -108,12 +131,12 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            Circuit DAG Compiler & 64-Frame Rollback Journal
+            Unbounded Circuit DAG, Exact MPS & Rollback Journal
           </h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
             <span>{spec.qubitCount} Qubits</span>
             <span className="mx-2" aria-hidden="true">·</span>
-            <span>{spec.backend === AqmBackendMode.CyclotomicExact ? 'Exact Z[ζ₈]/√2ᵏ Ring' : 'Gottesman-Knill F₂ Symplectic Tableau'}</span>
+            <span>{BACKEND_LABELS[spec.backend]}</span>
             <span className="mx-2" aria-hidden="true">·</span>
             <span>Kahn DAG Depth {maxLayer}</span>
             <span className="mx-2" aria-hidden="true">·</span>
@@ -123,32 +146,31 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
 
         <div className="flex flex-wrap items-center gap-3">
           <div
-            className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300 dark:border-slate-800"
+            className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-200/80 dark:bg-slate-900 border border-slate-300 dark:border-slate-800"
             role="group"
             aria-label="Execution backend"
           >
-            <button
-              type="button"
-              onClick={() => handleSwitchBackend(AqmBackendMode.CyclotomicExact)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                spec.backend === AqmBackendMode.CyclotomicExact
-                  ? 'bg-emerald-600 text-white'
-                  : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              Exact Cyclotomic
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSwitchBackend(AqmBackendMode.StabilizerTableau)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                spec.backend === AqmBackendMode.StabilizerTableau
-                  ? 'bg-emerald-600 text-white'
-                  : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              F₂ Stabilizer Tableau
-            </button>
+            {(
+              [
+                AqmBackendMode.CyclotomicExact,
+                AqmBackendMode.ExactMps,
+                AqmBackendMode.StabilizerTableau,
+                AqmBackendMode.AtlasHolospace,
+              ] as const
+            ).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => handleSwitchBackend(mode)}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  spec.backend === mode
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {BACKEND_LABELS[mode]}
+              </button>
+            ))}
           </div>
 
           <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -160,6 +182,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                 const idx = Number(e.target.value);
                 if (!Number.isNaN(idx) && CANONICAL_CIRCUIT_PRESETS[idx]) {
                   const preset = CANONICAL_CIRCUIT_PRESETS[idx];
+                  setWireWindowStart(0);
                   onUpdateSpec(preset, preset.steps.length);
                 }
               }}
@@ -184,7 +207,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
               onChange={(e) => handleChangeQubits(Number(e.target.value))}
               className="h-9 px-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-xs font-mono tabular-nums"
             >
-              {[2, 3, 4, 5, 6].map((n) => (
+              {wireOptions.map((n) => (
                 <option key={n} value={n}>
                   {n} qubits
                 </option>
@@ -194,7 +217,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
         </div>
       </div>
 
-      {/* Modeled Prism Refusal Alert if user composed an invalid instruction (e.g. CNOT(q0, q0) or T in Tableau mode) */}
+      {/* Modeled Prism Refusal Alert */}
       {compileError && (
         <div
           role="alert"
@@ -221,7 +244,6 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Gate Composer + Rollback Transport + Interactive SVG Circuit */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Gate Append Form */}
           <form
             onSubmit={handleAppendGate}
             className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4"
@@ -331,7 +353,35 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {spec.qubitCount > visibleWireCap && (
+                  <div className="flex items-center gap-1 mr-1 text-xs font-mono">
+                    <button
+                      type="button"
+                      disabled={clampedStart === 0}
+                      onClick={() => setWireWindowStart(Math.max(0, clampedStart - visibleWireCap))}
+                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
+                    >
+                      ◀ Wires
+                    </button>
+                    <span className="text-slate-500">
+                      q{clampedStart}–q{clampedStart + visibleWireCount - 1}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={clampedStart + visibleWireCap >= spec.qubitCount}
+                      onClick={() =>
+                        setWireWindowStart(
+                          Math.min(spec.qubitCount - visibleWireCap, clampedStart + visibleWireCap),
+                        )
+                      }
+                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
+                    >
+                      Wires ▶
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => onSetCursor(0)}
@@ -369,25 +419,24 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
 
             <div className="overflow-x-auto">
               <svg
-                viewBox={`0 0 ${Math.max(580, 110 + spec.steps.length * 64)} ${spec.qubitCount * 48 + 32}`}
+                viewBox={`0 0 ${Math.max(580, 110 + visibleStepsCap * 64)} ${visibleWireCount * 44 + 28}`}
                 className="w-full min-w-[540px] h-auto"
                 role="img"
                 aria-label="Quantum circuit diagram with rollback cursor"
               >
-                {/* Rollback Cursor Vertical Hairline */}
                 <line
-                  x1={74 + cursor * 64}
+                  x1={74 + Math.min(cursor, visibleStepsCap) * 64}
                   y1={8}
-                  x2={74 + cursor * 64}
-                  y2={spec.qubitCount * 48 + 20}
+                  x2={74 + Math.min(cursor, visibleStepsCap) * 64}
+                  y2={visibleWireCount * 44 + 18}
                   stroke="#10b981"
                   strokeWidth={2}
                   strokeDasharray="4 4"
                 />
 
-                {/* Qubit Wire Rails */}
-                {Array.from({ length: spec.qubitCount }, (_, q) => {
-                  const y = 32 + q * 48;
+                {Array.from({ length: visibleWireCount }, (_, localIdx) => {
+                  const q = clampedStart + localIdx;
+                  const y = 28 + localIdx * 44;
                   const isSel = q === selectedWire;
                   return (
                     <g
@@ -396,10 +445,10 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                       className="cursor-pointer"
                     >
                       <rect
-                        x={8}
-                        y={y - 14}
-                        width={52}
-                        height={28}
+                        x={6}
+                        y={y - 13}
+                        width={56}
+                        height={26}
                         rx={6}
                         fill={isSel ? '#065f46' : '#1e293b'}
                         stroke={isSel ? '#34d399' : '#334155'}
@@ -409,15 +458,15 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                         y={y + 4}
                         textAnchor="middle"
                         fill={isSel ? '#ecfdf5' : '#cbd5e1'}
-                        fontSize={12}
+                        fontSize={11}
                         fontFamily="IBM Plex Mono, monospace"
                       >
                         q{q} |0⟩
                       </text>
                       <line
-                        x1={60}
+                        x1={62}
                         y1={y}
-                        x2={Math.max(560, 96 + spec.steps.length * 64)}
+                        x2={Math.max(560, 96 + visibleStepsCap * 64)}
                         y2={y}
                         stroke={isSel ? '#10b981' : '#475569'}
                         strokeWidth={isSel ? 2 : 1.25}
@@ -426,13 +475,18 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   );
                 })}
 
-                {/* Gate Steps */}
-                {spec.steps.map((step, idx) => {
+                {spec.steps.slice(0, visibleStepsCap).map((step, idx) => {
                   const x = 106 + idx * 64;
                   const executed = idx < cursor;
                   const inCone = lightconeSet.has(idx);
                   const w0 = step.targets[0] ?? 0;
-                  const y0 = 32 + Math.min(spec.qubitCount - 1, w0) * 48;
+                  const inWin0 = w0 >= clampedStart && w0 < clampedStart + visibleWireCount;
+                  const w1 = step.targets[1] ?? w0;
+                  const inWin1 = w1 >= clampedStart && w1 < clampedStart + visibleWireCount;
+                  if (!inWin0 && !inWin1) return null;
+
+                  const local0 = Math.max(0, Math.min(visibleWireCount - 1, w0 - clampedStart));
+                  const y0 = 28 + local0 * 44;
                   const strokeCol =
                     step.kind === GateKind.MEASURE
                       ? '#f59e0b'
@@ -451,23 +505,27 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                           : '#0f172a';
 
                   if (step.targets.length === 2) {
-                    const w1 = step.targets[1] ?? 0;
-                    const y1 = 32 + Math.min(spec.qubitCount - 1, w1) * 48;
+                    const local1 = Math.max(0, Math.min(visibleWireCount - 1, w1 - clampedStart));
+                    const y1 = 28 + local1 * 44;
                     return (
                       <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
                         <line x1={x} y1={y0} x2={x} y2={y1} stroke={strokeCol} strokeWidth={2.2} />
-                        <circle cx={x} cy={y0} r={6} fill={strokeCol} />
-                        <circle cx={x} cy={y1} r={14} fill={fillCol} stroke={strokeCol} strokeWidth={1.8} />
-                        <text
-                          x={x}
-                          y={y1 + 4}
-                          textAnchor="middle"
-                          fill="#f8fafc"
-                          fontSize={10}
-                          fontFamily="IBM Plex Mono, monospace"
-                        >
-                          {step.kind === GateKind.CNOT ? '⊕' : step.kind}
-                        </text>
+                        {inWin0 && <circle cx={x} cy={y0} r={5.5} fill={strokeCol} />}
+                        {inWin1 && (
+                          <>
+                            <circle cx={x} cy={y1} r={13} fill={fillCol} stroke={strokeCol} strokeWidth={1.8} />
+                            <text
+                              x={x}
+                              y={y1 + 4}
+                              textAnchor="middle"
+                              fill="#f8fafc"
+                              fontSize={10}
+                              fontFamily="IBM Plex Mono, monospace"
+                            >
+                              {step.kind === GateKind.CNOT ? '⊕' : step.kind}
+                            </text>
+                          </>
+                        )}
                       </g>
                     );
                   }
@@ -475,10 +533,10 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   return (
                     <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
                       <rect
-                        x={x - 18}
-                        y={y0 - 16}
-                        width={36}
-                        height={32}
+                        x={x - 17}
+                        y={y0 - 15}
+                        width={34}
+                        height={30}
                         rx={6}
                         fill={fillCol}
                         stroke={strokeCol}
@@ -500,7 +558,6 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
               </svg>
             </div>
 
-            {/* Step List + Counterfactual Measurement Re-Branching */}
             {spec.steps.length === 0 ? (
               <p className="text-xs text-slate-500 py-2">
                 Circuit is empty (register in ground state |0⟩⊗ⁿ). Append a gate or pick a preset above.
@@ -508,10 +565,10 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
             ) : (
               <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                  SHA-256 Journal Steps & Measurement Branch Controls
+                  SHA-256 Journal Steps ({spec.steps.length} total) & Measurement Branch Controls
                 </div>
                 <div className="max-h-56 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-800/80">
-                  {spec.steps.map((step, idx) => {
+                  {spec.steps.slice(0, 160).map((step, idx) => {
                     const jEntry = session?.journal[idx];
                     const isActive = idx < cursor;
                     return (
@@ -520,7 +577,13 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                         className="py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
                       >
                         <div className="flex items-center gap-3 font-mono tabular-nums">
-                          <span className={isActive ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-slate-400'}>
+                          <span
+                            className={
+                              isActive
+                                ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                                : 'text-slate-400'
+                            }
+                          >
                             #{String(idx + 1).padStart(2, '0')}
                           </span>
                           <span className="text-slate-900 dark:text-slate-100 font-medium">
@@ -528,7 +591,8 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                           </span>
                           {jEntry?.measurement && (
                             <span className="text-amber-600 dark:text-amber-400">
-                              → |{jEntry.measurement.outcome}⟩ (P₀={(jEntry.measurement.probZero * 100).toFixed(1)}%)
+                              → |{jEntry.measurement.outcome}⟩ (P₀=
+                              {(jEntry.measurement.probZero * 100).toFixed(1)}%)
                             </span>
                           )}
                           {jEntry && (
@@ -579,14 +643,13 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
           </div>
         </div>
 
-        {/* Right: Exact State Vector / Stabilizer Tableau & k14 Conservation Telemetry */}
+        {/* Right: Exact State / MPS / Tableau / Atlas Telemetry */}
         <div className="lg:col-span-5 space-y-6">
-          {/* k14 Conservation & MPS Bond Rank Readout */}
           {activeFrame && (
             <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  k14 Norm Conservation & MPS Ranks
+                  k14 Norm Conservation & Tensor Bond Ranks
                 </h2>
                 <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
                   {activeFrame.conservation.normExactOne ? '● Exact Norm = 1' : '✖ Violated'}
@@ -598,16 +661,18 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   <div className="text-xs text-slate-500 dark:text-slate-400">
                     Scaled Probability Mass
                   </div>
-                  <div className="mt-0.5 text-lg font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                    {activeFrame.conservation.rationalNumerator} / {activeFrame.conservation.scaleDenominator}
+                  <div className="mt-0.5 text-sm font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100 break-all">
+                    {activeFrame.conservation.rationalNumerator} /{' '}
+                    {activeFrame.conservation.scaleDenominator}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-slate-500 dark:text-slate-400">
-                    MPS Schmidt Bond χ
+                    Bond / Carrier Rank χ
                   </div>
-                  <div className="mt-0.5 text-lg font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                    [{activeFrame.cyclotomic?.mpsBondRanks.join(', ') || '1'}]
+                  <div className="mt-0.5 text-sm font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100 truncate">
+                    [{activeFrame.mpsBondDimensions.slice(0, 8).join(', ')}
+                    {activeFrame.mpsBondDimensions.length > 8 ? ', …' : ''}]
                   </div>
                 </div>
               </div>
@@ -618,12 +683,16 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
             </div>
           )}
 
-          {/* Reduced Single-Qubit Bloch Coordinates */}
           {activeFrame && (
             <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Single-Qubit Reduced Bloch Coordinates
-              </h2>
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Single-Qubit Reduced Bloch Coordinates
+                </h2>
+                <span className="text-xs font-mono text-slate-500">
+                  Showing q{clampedStart}–q{clampedStart + visibleWireCount - 1}
+                </span>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs font-mono tabular-nums">
                   <thead>
@@ -637,39 +706,48 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
-                    {activeFrame.blochVectors.map((bv) => (
-                      <tr
-                        key={bv.qubit}
-                        onClick={() => onSelectWire(bv.qubit)}
-                        className={`cursor-pointer ${
-                          bv.qubit === selectedWire
-                            ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
-                            : 'text-slate-800 dark:text-slate-200'
-                        }`}
-                      >
-                        <td className="py-1.5 pr-2 font-semibold">q{bv.qubit}</td>
-                        <td className="py-1.5 px-2">{(Math.abs(bv.rx) < 1e-9 ? 0 : bv.rx).toFixed(3)}</td>
-                        <td className="py-1.5 px-2">{(Math.abs(bv.ry) < 1e-9 ? 0 : bv.ry).toFixed(3)}</td>
-                        <td className="py-1.5 px-2">{(Math.abs(bv.rz) < 1e-9 ? 0 : bv.rz).toFixed(3)}</td>
-                        <td className="py-1.5 px-2">{bv.purity.toFixed(3)}</td>
-                        <td className="py-1.5 pl-2">{(bv.p1 * 100).toFixed(1)}%</td>
-                      </tr>
-                    ))}
+                    {activeFrame.blochVectors
+                      .slice(clampedStart, clampedStart + visibleWireCount)
+                      .map((bv) => (
+                        <tr
+                          key={bv.qubit}
+                          onClick={() => onSelectWire(bv.qubit)}
+                          className={`cursor-pointer ${
+                            bv.qubit === selectedWire
+                              ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
+                              : 'text-slate-800 dark:text-slate-200'
+                          }`}
+                        >
+                          <td className="py-1.5 pr-2 font-semibold">q{bv.qubit}</td>
+                          <td className="py-1.5 px-2">
+                            {(Math.abs(bv.rx) < 1e-9 ? 0 : bv.rx).toFixed(3)}
+                          </td>
+                          <td className="py-1.5 px-2">
+                            {(Math.abs(bv.ry) < 1e-9 ? 0 : bv.ry).toFixed(3)}
+                          </td>
+                          <td className="py-1.5 px-2">
+                            {(Math.abs(bv.rz) < 1e-9 ? 0 : bv.rz).toFixed(3)}
+                          </td>
+                          <td className="py-1.5 px-2">{bv.purity.toFixed(3)}</td>
+                          <td className="py-1.5 pl-2">{(bv.p1 * 100).toFixed(1)}%</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* Exact Cyclotomic Amplitudes or Stabilizer Generators */}
-          {activeFrame && spec.backend === AqmBackendMode.CyclotomicExact && (
+          {activeFrame && activeFrame.basisAmplitudes.length > 0 && (
             <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Exact Z[ζ₈] Basis Amplitudes
+                  Active Sparse Kets / Carrier Channels
                 </h2>
                 <span className="text-xs text-slate-500 font-mono tabular-nums">
-                  {activeFrame.basisAmplitudes.filter((a) => a.probability > 1e-9).length} non-zero / {activeFrame.basisAmplitudes.length}
+                  {activeFrame.cyclotomic
+                    ? `${activeFrame.cyclotomic.support.size} exact ket(s) in 2^${spec.qubitCount}`
+                    : `${activeFrame.basisAmplitudes.length} channel(s)`}
                 </span>
               </div>
 
@@ -678,7 +756,7 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
                       <th className="py-1.5 pr-2">Basis</th>
-                      <th className="py-1.5 px-2">Exact Z[ζ₈]</th>
+                      <th className="py-1.5 px-2">Representation</th>
                       <th className="py-1.5 px-2">Prob</th>
                       <th className="py-1.5 pl-2">Phase</th>
                     </tr>
@@ -686,18 +764,24 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
                     {activeFrame.basisAmplitudes
                       .filter((a) => a.probability > 1e-8)
-                      .map((amp) => (
-                        <tr key={amp.basisIndex} className="text-slate-800 dark:text-slate-200">
-                          <td className="py-1.5 pr-2 font-semibold">|{amp.bitstring}⟩</td>
-                          <td className="py-1.5 px-2 text-emerald-700 dark:text-emerald-400">
-                            {amp.exactFormula}
-                          </td>
-                          <td className="py-1.5 px-2">{(amp.probability * 100).toFixed(2)}%</td>
-                          <td className="py-1.5 pl-2">
-                            {((amp.phaseRad * 180) / Math.PI).toFixed(1)}°
-                          </td>
-                        </tr>
-                      ))}
+                      .map((amp) => {
+                        const shortKet =
+                          amp.bitstring.length > 16
+                            ? `${amp.bitstring.slice(0, 8)}…${amp.bitstring.slice(-6)}`
+                            : amp.bitstring;
+                        return (
+                          <tr key={`${amp.basisIndex}-${amp.bitstring}`} className="text-slate-800 dark:text-slate-200">
+                            <td className="py-1.5 pr-2 font-semibold">|{shortKet}⟩</td>
+                            <td className="py-1.5 px-2 text-emerald-700 dark:text-emerald-400">
+                              {amp.exactFormula}
+                            </td>
+                            <td className="py-1.5 px-2">{(amp.probability * 100).toFixed(2)}%</td>
+                            <td className="py-1.5 pl-2">
+                              {((amp.phaseRad * 180) / Math.PI).toFixed(1)}°
+                            </td>
+                          </tr>
+                        );
+                      })}
                   </tbody>
                 </table>
               </div>
@@ -708,17 +792,17 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
             <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Active F₂ Stabilizer Generators
+                  Active F₂ Stabilizer Generators (Word-Packed)
                 </h2>
                 <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
                   {activeFrame.stabilizersCommute ? '● Pairwise Commuting' : '✖ Anticommuting'}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 font-mono text-xs tabular-nums">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-xs tabular-nums max-h-64 overflow-y-auto">
                 {activeFrame.stabilizerGenerators.map((gen, idx) => (
                   <div
                     key={idx}
-                    className="px-3 py-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100"
+                    className="px-3 py-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 truncate"
                   >
                     S{idx}: {gen}
                   </div>

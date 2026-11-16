@@ -1,0 +1,49 @@
+# ISO/IEC 25010:2023 Pinned Quality Measures (Quality.lex.tex)
+
+[[measures]]
+id = "QM-01"
+characteristic = "Functional suitability"
+subcharacteristic = "Functional correctness"
+metric = "Cyclotomic scaled norm residual |sum |alpha|^2 - 1|"
+pinned_threshold = "0 (exact integer identity in Z[sqrt(2)] / 2^k)"
+evidence = "AQ-04, AQ-11"
+
+[[measures]]
+id = "QM-02"
+characteristic = "Performance efficiency"
+subcharacteristic = "Resource utilization"
+metric = "Topological Atlas holospace carrier state footprint per logical register"
+pinned_threshold = "768 bytes (96 classes x 8-byte complex carrier amplitude) + O(|unique_prefixes|) kappa cache"
+evidence = "AQ-13, open-tier scaling benchmark"
+
+[[measures]]
+id = "QM-03"
+characteristic = "Performance efficiency"
+subcharacteristic = "Time behaviour"
+metric = "Bit-packed F_2 symplectic Clifford step complexity"
+pinned_threshold = "O(n^2 / 64) 64-bit BigUint64Array word operations"
+evidence = "AQ-05"
+
+[[measures]]
+id = "QM-04"
+characteristic = "Reliability"
+subcharacteristic = "Fault tolerance"
+metric = "Rotated [[d^2, 1, d]] surface-code guaranteed single-sector fault correction radius"
+pinned_threshold = "t = floor((d - 1) / 2) Pauli faults for arbitrary odd d >= 3"
+evidence = "AQ-06, AQ-12"
+
+[[measures]]
+id = "QM-05"
+characteristic = "Security"
+subcharacteristic = "Integrity & Containment"
+metric = "Core-Wasm guest host-import count and request BoundedBuffer ceiling"
+pinned_threshold = "0 imports, 64 UTF-8 bytes maximum request, 24/24 Wasm vectors passed"
+evidence = "AQ-01, AQ-15"
+
+[[measures]]
+id = "QM-06"
+characteristic = "Compatibility"
+subcharacteristic = "Co-existence"
+metric = "Software tile PBR framebuffer alignment quantum"
+pinned_threshold = "16x16 pixels"
+evidence = "AQ-10"

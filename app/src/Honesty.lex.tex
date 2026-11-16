@@ -1,0 +1,83 @@
+\begin{lexlean}{Honesty}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\title{UTQC and Verdant AQM Row-Honesty Decision Table (prism-devrel utqc-row-honesty)}
+
+\begin{semanticmodule}
+
+inductive{
+  name: LedgerTier,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: someTrueAnchoredTheorem, fields: []},
+    {name: buildConstructedArtifact, fields: []},
+    {name: openMeasuredConjecture, fields: []}
+  ]
+}
+
+inductive{
+  name: HonestyVerdict,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: admitRow, fields: []},
+    {name: refuseUnanchoredSomeTrue, fields: []},
+    {name: refuseBenchMarkedAsProof, fields: []},
+    {name: refuseMissingDefectGate, fields: []}
+  ]
+}
+
+definition{
+  name: evaluateRowHonesty,
+  parameters: [
+    claimedTier : LedgerTier,
+    hasCitationAnchor : Bool,
+    isEmpiricalBenchmarkOnly : Bool,
+    hasPlantedDefectRefusal : Bool
+  ],
+  result: HonestyVerdict,
+  body: (match claimedTier
+    | LedgerTier.someTrueAnchoredTheorem =>
+        (if (not hasCitationAnchor)
+          then HonestyVerdict.refuseUnanchoredSomeTrue
+          else (if isEmpiricalBenchmarkOnly
+            then HonestyVerdict.refuseBenchMarkedAsProof
+            else HonestyVerdict.admitRow))
+    | LedgerTier.buildConstructedArtifact =>
+        (if isEmpiricalBenchmarkOnly
+          then HonestyVerdict.refuseBenchMarkedAsProof
+          else (if (not hasPlantedDefectRefusal)
+            then HonestyVerdict.refuseMissingDefectGate
+            else HonestyVerdict.admitRow))
+    | LedgerTier.openMeasuredConjecture =>
+        HonestyVerdict.admitRow),
+  axioms: []
+}
+
+theorem{
+  name: inv001BenchmarkCannotClaimTheorem,
+  statement: ((evaluateRowHonesty LedgerTier.someTrueAnchoredTheorem true true true)
+    = HonestyVerdict.refuseBenchMarkedAsProof),
+  proof: decide{},
+  axioms: []
+}
+
+theorem{
+  name: inv002BuildRequiresPlantedDefectGate,
+  statement: ((evaluateRowHonesty LedgerTier.buildConstructedArtifact false false false)
+    = HonestyVerdict.refuseMissingDefectGate),
+  proof: decide{},
+  axioms: []
+}
+
+theorem{
+  name: inv003OpenAdmitsEmpiricalScalingMeasurement,
+  statement: ((evaluateRowHonesty LedgerTier.openMeasuredConjecture false true false)
+    = HonestyVerdict.admitRow),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

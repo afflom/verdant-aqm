@@ -17,7 +17,9 @@ export enum GateKind {
 
 export enum AqmBackendMode {
   CyclotomicExact = 'CyclotomicExact',
+  ExactMps = 'ExactMps',
   StabilizerTableau = 'StabilizerTableau',
+  AtlasHolospace = 'AtlasHolospace',
 }
 
 export enum QuantumIsaErrorKind {
@@ -36,6 +38,13 @@ export enum UnitaryInvariantErrorKind {
 export enum StabilizerErrorKind {
   NonCliffordInTableauMode = 'StabilizerError::NonCliffordInTableauMode',
   AnticommutingStabilizerGenerator = 'StabilizerError::AnticommutingStabilizerGenerator',
+  EvenSurfaceCodeDistance = 'StabilizerError::EvenSurfaceCodeDistance',
+}
+
+export enum AtlasBraidErrorKind {
+  NonDiscreteAngleOnCliffordCarrier = 'AtlasBraidError::NonDiscreteAngleOnCliffordCarrier',
+  MtcAxiomResidualExceeded = 'AtlasBraidError::MtcAxiomResidualExceeded',
+  InvalidAtlasCoordinateProduct = 'AtlasBraidError::InvalidAtlasCoordinateProduct',
 }
 
 export enum MeasurementJournalErrorKind {
@@ -43,11 +52,20 @@ export enum MeasurementJournalErrorKind {
   CollapsedRegisterWrite = 'MeasurementJournalError::CollapsedRegisterWrite',
 }
 
+export enum HonestyVerdictErrorKind {
+  RefuseUnanchoredSomeTrue = 'HonestyVerdict::RefuseUnanchoredSomeTrue',
+  RefuseBenchMarkedAsProof = 'HonestyVerdict::RefuseBenchMarkedAsProof',
+  RefuseMissingDefectGate = 'HonestyVerdict::RefuseMissingDefectGate',
+  RefuseLossyUorcChallenger = 'UorcAdmissionError::RefuseLossyReconstruction',
+}
+
 export type ModeledAqmErrorKind =
   | QuantumIsaErrorKind
   | UnitaryInvariantErrorKind
   | StabilizerErrorKind
-  | MeasurementJournalErrorKind;
+  | AtlasBraidErrorKind
+  | MeasurementJournalErrorKind
+  | HonestyVerdictErrorKind;
 
 export interface ModeledAqmError {
   readonly kind: ModeledAqmErrorKind;

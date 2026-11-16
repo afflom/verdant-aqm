@@ -9,8 +9,7 @@ import { FOUR, ONE, SIXTEEN, THREE, TILE_EDGE_PX, TWO, ZERO } from './stratum0';
 import { BlochVector, EntanglementEdge } from './types';
 import {
   PauliFault,
-  SURFACE_CODE_DATA_COORDS,
-  SURFACE_CODE_PLAQUETTES,
+  buildRotatedSurfaceCode,
   extractSurfaceCodeSyndromes,
 } from './stabilizer';
 
@@ -139,6 +138,11 @@ function addLineBeam(
   addBoxTriangles(out, mx, my, mz, dx, dy, dz, color, 0.2, emissive);
 }
 
+function inferDistanceFromFaults(len: number): number {
+  const root = Math.round(Math.sqrt(Math.max(9, len)));
+  return root >= THREE && root % TWO === ONE ? root : THREE;
+}
+
 export function buildSoftwareQuantumSceneTriangles(params: {
   sceneMode: 'bloch' | 'surface-code' | 'lightcone';
   blochVectors: readonly BlochVector[];
@@ -151,9 +155,14 @@ export function buildSoftwareQuantumSceneTriangles(params: {
   addBoxTriangles(tris, 0, -1.45, 0, 5.8, 0.08, 3.8, [0.09, 0.13, 0.19], 0.8, 0);
 
   if (params.sceneMode === 'surface-code') {
-    const syn = extractSurfaceCodeSyndromes(params.surfaceFaults);
-    const scale = 1.35;
-    for (const plaq of SURFACE_CODE_PLAQUETTES) {
+    const d = inferDistanceFromFaults(params.surfaceFaults.length);
+    const geom = buildRotatedSurfaceCode(d);
+    const syn = extractSurfaceCodeSyndromes(params.surfaceFaults, d);
+    const ratio = THREE / d;
+    const scale = 1.35 * ratio;
+    const plaqHalf = 0.52 * ratio;
+
+    for (const plaq of geom.plaquettes) {
       const excited = syn.excitedIds.includes(plaq.id);
       const col: [number, number, number] =
         plaq.kind === 'X'
@@ -168,15 +177,15 @@ export function buildSoftwareQuantumSceneTriangles(params: {
         plaq.centerX * scale,
         -1.22 + (excited ? 0.14 : 0),
         plaq.centerZ * scale,
-        0.52,
+        plaqHalf,
         excited ? 0.18 : 0.06,
-        0.52,
+        plaqHalf,
         col,
         0.35,
         excited ? 0.35 : 0.04,
       );
     }
-    for (const dq of SURFACE_CODE_DATA_COORDS) {
+    for (const dq of geom.dataCoords) {
       const f = params.surfaceFaults[dq.id] ?? 'I';
       const col: [number, number, number] =
         f === 'I'
@@ -186,13 +195,24 @@ export function buildSoftwareQuantumSceneTriangles(params: {
             : f === 'Z'
               ? [0.18, 0.75, 0.95]
               : [0.96, 0.68, 0.16];
-      addBoxTriangles(tris, dq.x * scale, -0.82, dq.z * scale, 0.16, 0.45, 0.16, [0.22, 0.28, 0.36], 0.5, 0);
+      addBoxTriangles(
+        tris,
+        dq.x * scale,
+        -0.82,
+        dq.z * scale,
+        0.16 * ratio,
+        0.45,
+        0.16 * ratio,
+        [0.22, 0.28, 0.36],
+        0.5,
+        0,
+      );
       addOctahedronSphere(
         tris,
         dq.x * scale,
         -0.25,
         dq.z * scale,
-        0.24,
+        0.24 * ratio,
         col,
         f === 'I' ? 0.05 : 0.35,
       );
@@ -200,35 +220,54 @@ export function buildSoftwareQuantumSceneTriangles(params: {
     return tris;
   }
 
-  // Bloch manifold & entanglement bridges
-  const n = Math.max(ONE, params.blochVectors.length);
+  // Bloch manifold & entanglement bridges (focus up to 16 wires so megascale registers render cleanly)
+  const visibleBloch = params.blochVectors.slice(ZERO, SIXTEEN);
+  const n = Math.max(ONE, visibleBloch.length);
   const spacing = Math.min(2.3, 7.2 / n);
   const startX = -((n - ONE) * spacing) * 0.5;
+  const stationScale = Math.min(ONE, 6 / Math.max(THREE, n));
 
-  params.blochVectors.forEach((bv, idx) => {
+  visibleBloch.forEach((bv, idx) => {
     const x = startX + idx * spacing;
-    // Pedestal base
-    addBoxTriangles(tris, x, -1.18, 0, 0.48, 0.2, 0.48, [0.16, 0.22, 0.3], 0.55, 0);
-    // Equatorial frame rails
+    addBoxTriangles(
+      tris,
+      x,
+      -1.18,
+      0,
+      0.48 * stationScale,
+      0.2,
+      0.48 * stationScale,
+      [0.16, 0.22, 0.3],
+      0.55,
+      0,
+    );
     if (params.lod >= ONE) {
-      addBoxTriangles(tris, x, 0, 0, 0.88, 0.025, 0.88, [0.14, 0.3, 0.42], 0.4, 0.04);
+      addBoxTriangles(
+        tris,
+        x,
+        0,
+        0,
+        0.88 * stationScale,
+        0.025,
+        0.88 * stationScale,
+        [0.14, 0.3, 0.42],
+        0.4,
+        0.04,
+      );
     }
-    // Core hub
-    addOctahedronSphere(tris, x, 0, 0, 0.14, [0.35, 0.45, 0.58], 0.06);
-    // Bloch state tip (Three.js +Y = Z_bloch, +X = X_bloch, +Z = Y_bloch)
-    const tipX = x + bv.rx * 0.82;
-    const tipY = bv.rz * 0.82;
-    const tipZ = bv.ry * 0.82;
+    addOctahedronSphere(tris, x, 0, 0, 0.14 * stationScale, [0.35, 0.45, 0.58], 0.06);
+    const tipX = x + bv.rx * 0.82 * stationScale;
+    const tipY = bv.rz * 0.82 * stationScale;
+    const tipZ = bv.ry * 0.82 * stationScale;
     const vecCol: [number, number, number] =
-      bv.collapsedTo !== null
-        ? [0.96, 0.65, 0.14]
-        : [0.09, 0.82, 0.62];
-    addLineBeam(tris, x, 0, 0, tipX, tipY, tipZ, 0.055, vecCol, 0.32);
-    addOctahedronSphere(tris, tipX, tipY, tipZ, 0.16, vecCol, 0.38);
+      bv.collapsedTo !== null ? [0.96, 0.65, 0.14] : [0.09, 0.82, 0.62];
+    addLineBeam(tris, x, 0, 0, tipX, tipY, tipZ, 0.055 * stationScale, vecCol, 0.32);
+    addOctahedronSphere(tris, tipX, tipY, tipZ, 0.16 * stationScale, vecCol, 0.38);
   });
 
   if (params.lod >= ONE) {
     for (const edge of params.entanglementEdges) {
+      if (edge.qubitA >= n || edge.qubitB >= n) continue;
       const xA = startX + edge.qubitA * spacing;
       const xB = startX + edge.qubitB * spacing;
       const archY = 0.95 + edge.correlationStrength * 0.35;
@@ -268,12 +307,11 @@ export function rasterizeQuantumSceneTiles(params: {
   const pixels = new Uint8ClampedArray(width * height * FOUR);
   const zbuf = new Float32Array(width * height).fill(1e9);
 
-  // Fill deep obsidian horizon gradient background
   for (let y = ZERO; y < height; y += ONE) {
     const t = y / Math.max(ONE, height - ONE);
-    const bgR = Math.round((8 + t * 10));
-    const bgG = Math.round((13 + t * 16));
-    const bgB = Math.round((21 + t * 24));
+    const bgR = Math.round(8 + t * 10);
+    const bgG = Math.round(13 + t * 16);
+    const bgB = Math.round(21 + t * 24);
     for (let x = ZERO; x < width; x += ONE) {
       const p = (y * width + x) * FOUR;
       pixels[p] = bgR;
@@ -283,7 +321,6 @@ export function rasterizeQuantumSceneTiles(params: {
     }
   }
 
-  // Camera basis from spherical coordinates
   const cosP = Math.cos(params.pitchRad);
   const sinP = Math.sin(params.pitchRad);
   const cosY = Math.cos(params.yawRad);
@@ -302,13 +339,11 @@ export function rasterizeQuantumSceneTiles(params: {
   const fy = fdy / fLen;
   const fz = fdz / fLen;
 
-  // Right = normalize(f x up(0,1,0)) = (-fz, 0, fx)
   const rLen = Math.hypot(-fz, fx) || ONE;
   const rx = -fz / rLen;
   const ry = 0;
   const rz = fx / rLen;
 
-  // Up = r x f
   const ux = ry * fz - rz * fy;
   const uy = rz * fx - rx * fz;
   const uz = rx * fy - ry * fx;
@@ -344,7 +379,6 @@ export function rasterizeQuantumSceneTiles(params: {
     const area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
     if (Math.abs(area) < 0.5) continue;
 
-    // World normal for warm key + cool hemisphere PBR shading
     const e1x = tri.v1[0] - tri.v0[0];
     const e1y = tri.v1[1] - tri.v0[1];
     const e1z = tri.v1[2] - tri.v0[2];
@@ -371,7 +405,6 @@ export function rasterizeQuantumSceneTiles(params: {
     const sB = Math.round(Math.pow(acesFilmic(linB), 1 / 2.2) * 255);
 
     const stIdx = screenTris.length;
-    // Normalize winding order so area > 0
     if (area > 0) {
       screenTris.push({
         x0: p0[0], y0: p0[1], z0: p0[2],

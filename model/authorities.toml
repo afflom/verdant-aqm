@@ -1,0 +1,57 @@
+# Normative Authorities Registry (prism-devrel Compliance Facet)
+
+[[authorities]]
+id = "NIST-FIPS-180-4"
+title = "Secure Hash Standard (SHS) — SHA-256"
+clause = "Section 6.2"
+facet = "Security.lex.tex, Compliance.lex.tex"
+evidence = "src/aqm/sha256.ts + AQ-01 NIST 'abc' vector"
+
+[[authorities]]
+id = "BLAKE3-SPEC-2020"
+title = "BLAKE3 Cryptographic Hash and Hologram v4 Content-Addressing"
+clause = "Section 2.1 (IV, permutation, tree chaining)"
+facet = "Security.lex.tex, Compliance.lex.tex"
+evidence = "src/aqm/blake3.ts + src/aqm/holoGuest.ts"
+
+[[authorities]]
+id = "ISO-IEC-IEEE-42010-2022"
+title = "Systems and software engineering — Architecture description"
+clause = "Clauses 5-7 (Stakeholders, Concerns, Architecture Views)"
+facet = "Architecture.lex.tex"
+evidence = "Architecture::architectureValid"
+
+[[authorities]]
+id = "ISO-IEC-25010-2023"
+title = "Systems and software Quality Requirements and Evaluation (SQuaRE)"
+clause = "Product quality model (9 characteristics)"
+facet = "Quality.lex.tex"
+evidence = "Quality::pinnedQualityThresholdsHold"
+
+[[authorities]]
+id = "ISO-19450-2024"
+title = "Automation systems and integration — Object-Process Methodology (OPM)"
+clause = "Objects, Processes, Procedural Links"
+facet = "Design.lex.tex"
+evidence = "Design::OpmObject, Design::OpmProcess"
+
+[[authorities]]
+id = "OMG-UML-2.5.1"
+title = "Unified Modeling Language — StateMachines and Interactions"
+clause = "Clause 14"
+facet = "Design.lex.tex"
+evidence = "Design::designValid"
+
+[[authorities]]
+id = "OPENQASM-2.0"
+title = "Open Quantum Assembly Language 2.0 (Cross, Bishop, Smolin, Gambetta)"
+clause = "qelib1.inc + unitary gate grammar"
+facet = "Compliance.lex.tex"
+evidence = "src/aqm/atlasUtqc.ts::parseOpenQasm2 + SkWeaver"
+
+[[authorities]]
+id = "UOR-ATLAS-UTQC"
+title = "Atlas-Native Topological Quantum Computation over C(Z_3 x Z_2^3, q) and PU(22)"
+clause = "MTC Pentagon/Hexagon/Balancing + Certified22 spectral gap Delta_lambda = 3"
+facet = "Quantum.lex.tex, Honesty.lex.tex"
+evidence = "src/aqm/atlasUtqc.ts::verifyAtlasMtcAxioms + SkWeaver"

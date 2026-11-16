@@ -1,0 +1,7 @@
+name = "VerdantAqm"
+version = "0.2.0"
+defaultTargets = ["VerdantAqm"]
+
+[[lean_lib]]
+name = "VerdantAqm"
+srcDir = "src"

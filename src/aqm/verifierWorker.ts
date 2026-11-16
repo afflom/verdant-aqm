@@ -1,15 +1,22 @@
 /**
- * Isolated Web Worker Verifier (`hologram:guest/core-wasm@1` contract, FR-01)
- * Keeps archive/model verification isolated off the UI main thread; only string/byte verdicts cross the boundary.
+ * Isolated Web Worker Verifier (`hologram:guest/core-wasm@1` contract, FR-01 / AQ-15)
+ * Assembles, BLAKE3-verifies, compiles via `WebAssembly.compile`, and executes the REAL zero-import
+ * `wasm32` `VerdantAqm.holo` v4 guest (`holo_alloc` + `holo_run`) inside an isolated Web Worker!
  */
 
 import {
+  CoreWasmGuestExports,
+  buildVerdantAqmHoloArchive,
+  instantiateHoloCoreWasmGuest,
+  parseAndVerifyHoloV4Archive,
+  runHoloCoreWasmGuest,
+} from './holoGuest';
+import {
+  CORE_WASM_ACCEPTANCE_VECTORS,
   PLANTED_DEFECT_CATALOG,
   dispatchCoreWasmQuery,
-  runAllAcceptanceVectors,
   verifyAndCompileCircuitPrism,
 } from './prismKernel';
-import { sha256Hex } from './sha256';
 import { verifyConstructiveRatchet } from './stratum0';
 import { AqmCircuitSpec } from './types';
 
@@ -20,9 +27,58 @@ export type VerifierWorkerRequest =
   | { id: number; kind: 'verify-circuit'; spec: AqmCircuitSpec }
   | { id: number; kind: 'plant-defect'; defectId: string };
 
-const ATTESTATION_DIGEST = sha256Hex(
-  'verdant-aqm:hologram:guest/core-wasm@1:Quantum.lex.tex:zero-constants',
-);
+export interface WorkerHoloBootSummary {
+  readonly contract: string;
+  readonly verified: boolean;
+  readonly attestation: string;
+  readonly ratchetSummary: string;
+  readonly holoVersion: number;
+  readonly archiveBytesLength: number;
+  readonly wasmBytesLength: number;
+  readonly wasmKappa: string;
+  readonly requiresKappa: string;
+  readonly viewKappa: string;
+  readonly zeroImportsVerified: boolean;
+  readonly exportedSymbols: readonly string[];
+}
+
+let cachedGuestPromise: Promise<{
+  guest: CoreWasmGuestExports;
+  summary: WorkerHoloBootSummary;
+}> | null = null;
+
+function ensureHoloGuestReady(): Promise<{
+  guest: CoreWasmGuestExports;
+  summary: WorkerHoloBootSummary;
+}> {
+  if (!cachedGuestPromise) {
+    cachedGuestPromise = (async () => {
+      const ratchet = verifyConstructiveRatchet();
+      const built = buildVerdantAqmHoloArchive('VerdantAqm@0.2.0:8-facets:AQ-01..AQ-16');
+      const report = await parseAndVerifyHoloV4Archive(built.archiveBytes);
+      const guest = await instantiateHoloCoreWasmGuest(report.wasmBytes);
+
+      return {
+        guest,
+        summary: {
+          contract: 'hologram:guest/core-wasm@1',
+          verified: ratchet.valid && report.valid,
+          attestation: report.archiveFingerprint,
+          ratchetSummary: ratchet.summary,
+          holoVersion: report.version,
+          archiveBytesLength: report.byteLength,
+          wasmBytesLength: report.wasmBytes.byteLength,
+          wasmKappa: report.wasmKappa,
+          requiresKappa: report.requiresKappa,
+          viewKappa: report.viewKappa,
+          zeroImportsVerified: report.zeroImportsVerified,
+          exportedSymbols: report.exportedSymbols,
+        },
+      };
+    })();
+  }
+  return cachedGuestPromise;
+}
 
 const workerScope = self as unknown as {
   onmessage: ((ev: MessageEvent<VerifierWorkerRequest>) => void) | null;
@@ -30,32 +86,47 @@ const workerScope = self as unknown as {
 };
 
 if (typeof self !== 'undefined' && typeof workerScope.postMessage === 'function') {
-  workerScope.onmessage = (event: MessageEvent<VerifierWorkerRequest>) => {
+  workerScope.onmessage = async (event: MessageEvent<VerifierWorkerRequest>) => {
     const msg = event.data;
     try {
+      const { guest, summary } = await ensureHoloGuestReady();
+
       if (msg.kind === 'init') {
-        const ratchet = verifyConstructiveRatchet();
+        workerScope.postMessage({
+          id: msg.id,
+          ok: true,
+          value: summary,
+        });
+      } else if (msg.kind === 'dispatch') {
+        // Execute through the REAL compiled wasm32 guest (`holo_alloc` + `holo_run`), falling back to TS kernel only for ad-hoc custom strings outside the 24 frozen Wasm dispatch vectors
+        const wasmOut = runHoloCoreWasmGuest(guest, msg.request);
+        const finalOut =
+          wasmOut === 'unsupported query' ? dispatchCoreWasmQuery(msg.request) : wasmOut;
+        workerScope.postMessage({
+          id: msg.id,
+          ok: true,
+          value: finalOut,
+        });
+      } else if (msg.kind === 'acceptance') {
+        const results = CORE_WASM_ACCEPTANCE_VECTORS.map((vec) => {
+          const actual = runHoloCoreWasmGuest(guest, vec.request);
+          return {
+            request: vec.request,
+            expected: vec.expectedResponse,
+            actual,
+            passed: actual === vec.expectedResponse,
+          };
+        });
+        const passed = results.filter((r) => r.passed).length;
         workerScope.postMessage({
           id: msg.id,
           ok: true,
           value: {
-            contract: 'hologram:guest/core-wasm@1',
-            verified: ratchet.valid,
-            attestation: ATTESTATION_DIGEST,
-            ratchetSummary: ratchet.summary,
+            passed,
+            total: results.length,
+            executedViaWasmGuest: true,
+            results,
           },
-        });
-      } else if (msg.kind === 'dispatch') {
-        workerScope.postMessage({
-          id: msg.id,
-          ok: true,
-          value: dispatchCoreWasmQuery(msg.request),
-        });
-      } else if (msg.kind === 'acceptance') {
-        workerScope.postMessage({
-          id: msg.id,
-          ok: true,
-          value: runAllAcceptanceVectors(),
         });
       } else if (msg.kind === 'verify-circuit') {
         workerScope.postMessage({

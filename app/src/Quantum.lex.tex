@@ -4,7 +4,7 @@
 \useglossary{prism.arch@1.0.0}
 \importmodule{Foundation.Ontology.V1.Model}
 \importmodule{Foundation.Bytes}
-\title{Verdant AQM constructive quantum ISA, cyclotomic norm conservation, and symplectic tableau invariants}
+\title{Verdant AQM unbounded quantum ISA, sparse cyclotomic MPS, bit-packed symplectic tableaus, parametric surface codes, and Atlas topological holospace}
 
 \begin{semanticmodule}
 
@@ -23,6 +23,18 @@ inductive{
     {name: cz, fields: []},
     {name: swap, fields: []},
     {name: measureZ, fields: []}
+  ]
+}
+
+inductive{
+  name: ExecutionBackendKind,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: cyclotomicSparseExact, fields: []},
+    {name: cyclotomicExactMps, fields: []},
+    {name: symplecticBitPacked, fields: []},
+    {name: atlasHolospaceBraid, fields: []}
   ]
 }
 
@@ -55,7 +67,19 @@ inductive{
   parameters: [],
   constructors: [
     {name: nonCliffordInTableauMode, fields: []},
-    {name: anticommutingStabilizerGenerator, fields: []}
+    {name: anticommutingStabilizerGenerator, fields: []},
+    {name: evenSurfaceCodeDistance, fields: []}
+  ]
+}
+
+inductive{
+  name: AtlasBraidError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: nonDiscreteAngleOnCliffordCarrier, fields: []},
+    {name: mtcAxiomResidualExceeded, fields: []},
+    {name: invalidAtlasCoordinateProduct, fields: []}
   ]
 }
 
@@ -97,10 +121,22 @@ definition{
   body: (Foundation.Ontology.V1.Model::pow2Constructive (natFour))
 }
 definition{
+  name: natTwentyFour,
+  parameters: [],
+  result: Nat,
+  body: ((natThree) * (natEight))
+}
+definition{
   name: natSixtyFour,
   parameters: [],
   result: Nat,
   body: (Foundation.Ontology.V1.Model::pow2Constructive (natSix))
+}
+definition{
+  name: natNinetySix,
+  parameters: [],
+  result: Nat,
+  body: ((natFour) * (natTwentyFour))
 }
 definition{
   name: natOneTwentyEight,
@@ -110,15 +146,26 @@ definition{
 }
 
 structure{
-  name: QubitRegisterSpec,
+  name: UnboundedQubitRegisterSpec,
   type_parameters: [],
   parameters: [],
   fields: [
     {name: qubitCount, type: Nat},
-    {name: hilbertDim, type: Nat},
-    {name: dyadicScaleExp, type: Nat},
-    {name: accumBits, type: Nat},
-    {name: rollbackWindow, type: Nat}
+    {name: activeSupportCount, type: Nat},
+    {name: maxBondRank, type: Nat},
+    {name: packedWordsPerRow, type: Nat},
+    {name: accumBits, type: Nat}
+  ]
+}
+
+structure{
+  name: AtlasUseCaseSpec,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: scope, type: Nat},
+    {name: modality, type: Nat},
+    {name: context, type: Nat}
   ]
 }
 
@@ -177,34 +224,62 @@ definition{
 }
 
 definition{
-  name: symplecticInnerProductMod2,
-  parameters: [x1 : Bool, z1 : Bool, x2 : Bool, z2 : Bool],
+  name: surfaceCodeDistanceValid,
+  parameters: [d : Nat],
   result: Bool,
-  body: (not (((x1 && z2) != (z1 && x2)))),
+  body: (((natThree) <=? d) && ((d % (natTwo)) =? (natOne))),
+  axioms: []
+}
+
+definition{
+  name: atlasClassCount,
+  parameters: [p : AtlasUseCaseSpec],
+  result: Nat,
+  body: (((project p scope) * (project p modality)) * (project p context)),
+  axioms: []
+}
+
+definition{
+  name: atlasCondensedDim,
+  parameters: [p : AtlasUseCaseSpec],
+  result: Nat,
+  body: ((project p modality) * (project p context)),
   axioms: []
 }
 
 theorem{
-  name: canonicalFourQubitRegisterValid,
-  statement: (((Foundation.Ontology.V1.Model::pow2Constructive (natFour)) = (natSixteen))
-    ∧ ((natOneTwentyEight) = ((natTwo) * (natSixtyFour)))),
+  name: canonicalAtlasClassAndCarrierCounts,
+  statement: (((atlasClassCount
+      (record AtlasUseCaseSpec { scope := (natFour), modality := (natThree), context := (natEight) }))
+      = (natNinetySix))
+    ∧ ((atlasCondensedDim
+      (record AtlasUseCaseSpec { scope := (natFour), modality := (natThree), context := (natEight) }))
+      = (natTwentyFour))),
   proof: decide{},
   axioms: []
 }
 
 theorem{
-  name: cloningCnotRefusedByLinearity,
+  name: oddSurfaceCodeDistanceOnly,
+  statement: (((surfaceCodeDistanceValid ((natFour) + (natOne))) = true)
+    ∧ ((surfaceCodeDistanceValid (natFour)) = false)),
+  proof: decide{},
+  axioms: []
+}
+
+theorem{
+  name: cloningCnotRefusedAtArbitraryScale,
   statement: ((wiresDistinctAndBounded
     (record GateInstructionSpec {
       stepIndex := 0,
       kind := GateKind.cnot,
       arity := (natTwo),
-      primaryWire := 0,
-      secondaryWire := 0,
+      primaryWire := (natSixtyFour),
+      secondaryWire := (natSixtyFour),
       parentLayer := 0,
       layerIndex := (natOne)
     })
-    (natFour)) = false),
+    (natOneTwentyEight)) = false),
   proof: decide{},
   axioms: []
 }

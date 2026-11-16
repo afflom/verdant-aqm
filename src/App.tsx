@@ -31,8 +31,8 @@ import { quantumAudio } from './aqm/sonification';
 import { PauliFault, extractSurfaceCodeSyndromes } from './aqm/stabilizer';
 import { TropicalSyndromeDecodeResult, decodeSurfaceCodeTropical } from './aqm/tropical';
 import { AqmCircuitSpec } from './aqm/types';
+import { AtlasMegascalePanel } from './components/AtlasMegascalePanel';
 import { CircuitRollbackPanel } from './components/CircuitRollbackPanel';
-import { CustodyUorcPanel } from './components/CustodyUorcPanel';
 import { PrismVerifierPanel } from './components/PrismVerifierPanel';
 import {
   CameraPresetId,
@@ -41,7 +41,7 @@ import {
 } from './components/QuantumViewport3D';
 import { SurfaceCodePanel } from './components/SurfaceCodePanel';
 
-type ActiveWorkspace = 'studio' | 'circuit' | 'qec' | 'verifier' | 'custody';
+type ActiveWorkspace = 'studio' | 'circuit' | 'atlas' | 'qec' | 'verifier';
 
 const cyberneticLoop = new CyberneticObserverLoop();
 
@@ -74,10 +74,11 @@ export default function App() {
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
 
-  // Surface-code QEC state (synced between 3D Studio and QEC workspace)
+  // Parametric Surface-Code QEC state (d in {3, 5, 7, 9}, synced between 3D Studio and QEC workspace)
+  const [surfaceDistance, setSurfaceDistance] = useState<3 | 5 | 7 | 9>(3);
   const [surfaceFaults, setSurfaceFaults] = useState<PauliFault[]>(() => {
     const init = new Array<PauliFault>(9).fill('I');
-    init[4] = 'X'; // Seed a single bit-flip fault on central data qubit d4 for immediate inspection
+    init[4] = 'X';
     return init;
   });
   const [faultBrush, setFaultBrush] = useState<PauliFault>('X');
@@ -118,7 +119,6 @@ export default function App() {
   const validSession = sessionOutcome.ok ? sessionOutcome : null;
   const compileError = sessionOutcome.ok ? null : sessionOutcome.error;
 
-  // Keep last valid session cached so even if an invalid instruction is tested in Circuit Composer, 3D Studio stays live
   const [cachedValidSession, setCachedValidSession] = useState(validSession);
   useEffect(() => {
     if (validSession) {
@@ -134,8 +134,8 @@ export default function App() {
   }, [activeSession, cursor]);
 
   const surfaceSyndromes = useMemo(
-    () => extractSurfaceCodeSyndromes(surfaceFaults),
-    [surfaceFaults],
+    () => extractSurfaceCodeSyndromes(surfaceFaults, surfaceDistance),
+    [surfaceFaults, surfaceDistance],
   );
 
   const handleUpdateSpec = (nextSpec: AqmCircuitSpec, nextCursor?: number) => {
@@ -160,6 +160,29 @@ export default function App() {
     setSaliencePotentials(cyberneticLoop.stepFocus(wire % 8));
   };
 
+  const handleChangeSurfaceDistance = (nextD: 3 | 5 | 7 | 9) => {
+    setSurfaceDistance(nextD);
+    const total = nextD * nextD;
+    const fresh = new Array<PauliFault>(total).fill('I');
+    fresh[Math.floor(total / 2)] = 'X';
+    setSurfaceFaults(fresh);
+    setLastTropicalDecode(null);
+  };
+
+  const handleInjectMultiFaultPreset = () => {
+    const t = Math.floor((surfaceDistance - 1) / 2);
+    const total = surfaceDistance * surfaceDistance;
+    const next = new Array<PauliFault>(total).fill('I');
+    // Place t well-separated interior faults guaranteed within [[d^2, 1, d]] recovery radius
+    for (let k = 0; k < t; k += 1) {
+      const row = Math.min(surfaceDistance - 2, 1 + k * 2);
+      const col = Math.min(surfaceDistance - 2, 1 + ((k * 2) % Math.max(1, surfaceDistance - 2)));
+      next[row * surfaceDistance + col] = k % 2 === 0 ? 'X' : 'Z';
+    }
+    setSurfaceFaults(next);
+    setLastTropicalDecode(null);
+  };
+
   const handleInjectFaultAt = (qubitIdx: number, explicitBrush?: PauliFault) => {
     setSurfaceFaults((prev) => {
       const next = prev.slice();
@@ -170,7 +193,7 @@ export default function App() {
         const curIdx = order.indexOf(prev[qubitIdx]);
         next[qubitIdx] = order[(curIdx + 1) % order.length];
       }
-      const syn = extractSurfaceCodeSyndromes(next);
+      const syn = extractSurfaceCodeSyndromes(next, surfaceDistance);
       quantumAudio.chimeQuantumState(
         activeFrame?.blochVectors ?? [],
         activeFrame?.basisAmplitudes ?? [],
@@ -183,7 +206,7 @@ export default function App() {
   };
 
   const handleRunTropicalDecode = () => {
-    const decoded = decodeSurfaceCodeTropical(surfaceFaults);
+    const decoded = decodeSurfaceCodeTropical(surfaceFaults, surfaceDistance);
     setLastTropicalDecode(decoded);
   };
 
@@ -194,17 +217,22 @@ export default function App() {
   };
 
   const handleShareSnapshot = () => {
-    const token = encodeVdntSnapshotToken({ spec, cursor });
-    const hashUrl = `#vdnt=${token}`;
-    if (typeof window !== 'undefined') {
-      window.history.replaceState(null, '', hashUrl);
-      const fullUrl = `${window.location.origin}${window.location.pathname}${hashUrl}`;
-      if (navigator.clipboard?.writeText) {
-        void navigator.clipboard.writeText(fullUrl).catch(() => {});
+    try {
+      const token = encodeVdntSnapshotToken({ spec, cursor });
+      const hashUrl = `#vdnt=${token}`;
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', hashUrl);
+        const fullUrl = `${window.location.origin}${window.location.pathname}${hashUrl}`;
+        if (navigator.clipboard?.writeText) {
+          void navigator.clipboard.writeText(fullUrl).catch(() => {});
+        }
       }
+      setSnapshotNotice(`VDNT snapshot written to URL (${token.slice(0, 22)}...)`);
+      window.setTimeout(() => setSnapshotNotice(null), 4500);
+    } catch (err) {
+      setSnapshotNotice(err instanceof Error ? err.message : 'Snapshot exceeds URL ceiling');
+      window.setTimeout(() => setSnapshotNotice(null), 4500);
     }
-    setSnapshotNotice(`VDNT snapshot written to URL (${token.slice(0, 22)}...)`);
-    window.setTimeout(() => setSnapshotNotice(null), 4500);
   };
 
   const handleSlmSubmit = (e: React.FormEvent) => {
@@ -257,10 +285,10 @@ export default function App() {
           {(
             [
               ['studio', 'Studio 3D'],
-              ['circuit', 'Circuit & Rollback'],
+              ['circuit', 'Circuit & MPS'],
+              ['atlas', 'Atlas & Megascale'],
               ['qec', 'Surface Code QEC'],
-              ['verifier', 'Prism Verifier'],
-              ['custody', 'UORC & Custody'],
+              ['verifier', 'Prism & Holo'],
             ] as const
           ).map(([id, label]) => {
             const active = workspace === id;
@@ -299,7 +327,7 @@ export default function App() {
           <span className="font-semibold text-slate-900 dark:text-slate-100">{spec.name}</span>
           <span aria-hidden="true">·</span>
           <span>
-            Frame {cursor}/{spec.steps.length}
+            {spec.qubitCount}q · Frame {cursor}/{spec.steps.length}
           </span>
           <span aria-hidden="true">·</span>
           <span className="text-emerald-700 dark:text-emerald-400">
@@ -309,7 +337,10 @@ export default function App() {
           </span>
           <span aria-hidden="true">·</span>
           <span>
-            QEC Syndromes: {surfaceSyndromes.excitedIds.length === 0 ? 'Clean' : surfaceSyndromes.excitedIds.join(',')}
+            QEC [[{surfaceDistance * surfaceDistance},1,{surfaceDistance}]]:{' '}
+            {surfaceSyndromes.excitedIds.length === 0
+              ? 'Clean'
+              : surfaceSyndromes.excitedIds.join(',')}
           </span>
           <span aria-hidden="true" className="hidden xl:inline">·</span>
           <span className="hidden xl:inline text-slate-500">
@@ -357,28 +388,28 @@ export default function App() {
               onCycleDataQubitFault={(dq) => handleInjectFaultAt(dq)}
             />
 
-            {/* Unobtrusive Top-Left Spatial Spec Overlay (Zero Side Cards!) */}
+            {/* Unobtrusive Top-Left Spatial Spec Overlay */}
             <div className="absolute top-4 left-5 z-10 pointer-events-none max-w-md">
               <div className="text-xs font-mono text-slate-300 bg-[#0B1018]/92 border border-slate-800 px-3.5 py-2 rounded-lg space-y-0.5">
                 <div className="font-sans text-sm font-semibold text-slate-100">
                   {sceneMode === 'bloch'
-                    ? '3D Bloch Manifold & Entanglement Array'
+                    ? `3D Bloch Manifold (${spec.qubitCount}q · ${spec.backend})`
                     : sceneMode === 'surface-code'
-                      ? 'Rotated [[9, 1, 3]] Surface-Code Lattice'
-                      : '3D Causal Circuit & Tropical Lightcone'}
+                      ? `Rotated [[${surfaceDistance * surfaceDistance}, 1, ${surfaceDistance}]] Surface-Code Lattice`
+                      : `3D Causal Circuit & Tropical Lightcone (${spec.qubitCount}q)`}
                 </div>
                 <div className="text-slate-400">
                   {sceneMode === 'bloch' && activeFrame?.blochVectors[selectedWire]
                     ? `Selected q${selectedWire} · ⟨X⟩=${(Math.abs(activeFrame.blochVectors[selectedWire].rx) < 1e-9 ? 0 : activeFrame.blochVectors[selectedWire].rx).toFixed(2)} ⟨Y⟩=${(Math.abs(activeFrame.blochVectors[selectedWire].ry) < 1e-9 ? 0 : activeFrame.blochVectors[selectedWire].ry).toFixed(2)} ⟨Z⟩=${(Math.abs(activeFrame.blochVectors[selectedWire].rz) < 1e-9 ? 0 : activeFrame.blochVectors[selectedWire].rz).toFixed(2)} · Purity ${activeFrame.blochVectors[selectedWire].purity.toFixed(2)}`
                     : sceneMode === 'surface-code'
-                      ? `Click any data pillar d0–d8 to cycle faults · Excited: ${surfaceSyndromes.excitedIds.join(', ') || 'None'}`
+                      ? `Click any data pillar d0–d${surfaceDistance * surfaceDistance - 1} to cycle faults · Excited: ${surfaceSyndromes.excitedIds.join(', ') || 'None'}`
                       : `Selected q${selectedWire} · Backward (max, +) causal cone highlighted`}
                 </div>
               </div>
             </div>
 
             {/* Unified Collapsible Bottom Control Dock (Zero backdrop-filter over WebGL!) */}
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[min(960px,95vw)]">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[min(980px,95vw)]">
               <div className="flex justify-center mb-1.5">
                 <button
                   type="button"
@@ -401,9 +432,7 @@ export default function App() {
 
               {!dockCollapsed && (
                 <div className="rounded-xl bg-[#0D1420]/96 border border-slate-800 p-3.5 shadow-2xl space-y-3 text-slate-100">
-                  {/* Row 1: Scene Mode, Transport Stepper, LOD, Renderer, Camera & Audio */}
                   <div className="flex flex-wrap items-center justify-between gap-2.5">
-                    {/* Scene Mode Switcher */}
                     <div
                       className="flex items-center gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800"
                       role="group"
@@ -431,9 +460,21 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Circuit Rollback Stepper OR Surface-Code Quick Actions */}
                     {sceneMode === 'surface-code' ? (
                       <div className="flex items-center gap-1.5">
+                        <select
+                          aria-label="3D surface code distance"
+                          value={surfaceDistance}
+                          onChange={(e) =>
+                            handleChangeSurfaceDistance(Number(e.target.value) as 3 | 5 | 7 | 9)
+                          }
+                          className="h-8 px-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-slate-200"
+                        >
+                          <option value={3}>d=3 (9q)</option>
+                          <option value={5}>d=5 (25q)</option>
+                          <option value={7}>d=7 (49q)</option>
+                          <option value={9}>d=9 (81q)</option>
+                        </select>
                         <button
                           type="button"
                           onClick={handleRunTropicalDecode}
@@ -453,7 +494,9 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            setSurfaceFaults(new Array<PauliFault>(9).fill('I'));
+                            setSurfaceFaults(
+                              new Array<PauliFault>(surfaceDistance * surfaceDistance).fill('I'),
+                            );
                             setLastTropicalDecode(null);
                           }}
                           className="h-8 px-2.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-200 hover:bg-slate-700 whitespace-nowrap shrink-0"
@@ -508,7 +551,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* LOD, Renderer Toggle, Camera & Audio */}
                     <div className="flex flex-wrap items-center gap-1.5">
                       <select
                         aria-label="Progressive UORC Level of Detail"
@@ -562,7 +604,9 @@ export default function App() {
                         type="button"
                         onClick={toggleAudio}
                         aria-pressed={audioEnabled}
-                        aria-label={audioEnabled ? 'Mute modal quantum audio' : 'Enable modal quantum audio'}
+                        aria-label={
+                          audioEnabled ? 'Mute modal quantum audio' : 'Enable modal quantum audio'
+                        }
                         className={`h-8 px-2.5 rounded-lg border text-xs flex items-center gap-1 whitespace-nowrap shrink-0 ${
                           audioEnabled
                             ? 'bg-emerald-700 border-emerald-400 text-white'
@@ -584,7 +628,10 @@ export default function App() {
                     onSubmit={handleSlmSubmit}
                     className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/90"
                   >
-                    <label htmlFor="slm-director-input" className="text-xs font-mono text-slate-400 shrink-0">
+                    <label
+                      htmlFor="slm-director-input"
+                      className="text-xs font-mono text-slate-400 shrink-0"
+                    >
                       4-bit SLM Co-Pilot:
                     </label>
                     <input
@@ -592,7 +639,7 @@ export default function App() {
                       type="text"
                       value={slmPrompt}
                       onChange={(e) => setSlmPrompt(e.target.value)}
-                      placeholder='Try "prepare 3-qubit GHZ state", "4-qubit teleportation", or adversarial "clone q0 onto q0"'
+                      placeholder='Try "64-qubit sparse cat state", "32-qubit mps cascade", "96-qubit atlas braid", or "clone q0 onto q0"'
                       className="flex-1 min-w-[220px] h-8 px-3 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 placeholder:text-slate-500"
                     />
                     <button
@@ -647,17 +694,32 @@ export default function App() {
           />
         )}
 
+        {workspace === 'atlas' && (
+          <AtlasMegascalePanel
+            onLoadCircuitIntoStudio={(compiledSpec) => {
+              handleUpdateSpec(compiledSpec, compiledSpec.steps.length);
+              setSceneMode('bloch');
+              setWorkspace('studio');
+            }}
+          />
+        )}
+
         {workspace === 'qec' && (
           <SurfaceCodePanel
+            distance={surfaceDistance}
             faults={surfaceFaults}
             activeBrush={faultBrush}
             lastDecode={lastTropicalDecode}
+            onChangeDistance={handleChangeSurfaceDistance}
             onSetBrush={setFaultBrush}
             onInjectFaultAt={handleInjectFaultAt}
+            onInjectMultiFaultPreset={handleInjectMultiFaultPreset}
             onRunTropicalDecode={handleRunTropicalDecode}
             onApplyRecovery={handleApplyRecovery}
             onClearLattice={() => {
-              setSurfaceFaults(new Array<PauliFault>(9).fill('I'));
+              setSurfaceFaults(
+                new Array<PauliFault>(surfaceDistance * surfaceDistance).fill('I'),
+              );
               setLastTropicalDecode(null);
             }}
             onOpenIn3D={() => {
@@ -667,10 +729,8 @@ export default function App() {
           />
         )}
 
-        {workspace === 'verifier' && <PrismVerifierPanel />}
-
-        {workspace === 'custody' && (
-          <CustodyUorcPanel
+        {workspace === 'verifier' && (
+          <PrismVerifierPanel
             spec={spec}
             activeFrame={activeFrame}
             activeLod={lod}

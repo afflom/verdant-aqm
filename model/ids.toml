@@ -1,10 +1,10 @@
-# Verdant AQM Capability Register & Typed Failure Ledger (R1, R3, R5)
+# Verdant AQM Capability Register & Typed Failure Ledger (R1, R3, R5 — AQ-01..AQ-16)
 
 [[capabilities]]
 id = "AQ-01"
 level = "build"
 suite = "aqm"
-statement = "Constructive Stratum 0 derives Hilbert dimensions 2^n, dyadic denominators, tile edges, and BoundedBuffer limits purely from {0, 1} with zero magic literals."
+statement = "Constructive Stratum 0 derives powers of two, primes, tile edges, and BoundedBuffer limits purely from {0, 1} with zero magic literals."
 failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
 negative = "aqm:defect:oob"
 
@@ -12,7 +12,7 @@ negative = "aqm:defect:oob"
 id = "AQ-02"
 level = "build"
 suite = "aqm"
-statement = "Qubit wire linearity rejects out-of-bounds indices and duplicate multi-qubit wire references (no-cloning)."
+statement = "Unbounded qubit wire linearity rejects out-of-bounds indices and duplicate multi-qubit wire references (no-cloning) at arbitrary register scale."
 failure = "QuantumIsaError::DuplicateWireReference"
 negative = "aqm:defect:cloning"
 
@@ -28,7 +28,7 @@ negative = "aqm:defect:cyclic"
 id = "AQ-04"
 level = "build"
 suite = "aqm"
-statement = "Exact cyclotomic Z[zeta_8]/(sqrt(2))^k state-vector backend executes Clifford+T gates without floating-point drift and proves exact l2 norm conservation (k14)."
+statement = "Sparse BigInt-indexed cyclotomic Z[zeta_8]/(sqrt(2))^k engine executes unbounded Clifford+T circuits without 2^n dense allocation and proves exact l2 norm conservation (k14)."
 failure = "UnitaryInvariantError::NormConservationViolated"
 negative = "aqm:defect:nonunitary"
 
@@ -36,7 +36,7 @@ negative = "aqm:defect:nonunitary"
 id = "AQ-05"
 level = "build"
 suite = "aqm"
-statement = "Gottesman-Knill F_2 binary symplectic tableau simulates Clifford circuits and surface-code stabilizers while refusing non-Clifford gates and anticommuting generators."
+statement = "64-bit word-packed Gottesman-Knill F_2 symplectic tableau simulates 1,000+ qubit Clifford circuits in O(n^2/64) while refusing non-Clifford gates and anticommuting generators."
 failure = "StabilizerError::NonCliffordInTableauMode"
 negative = "aqm:defect:tableau-t"
 
@@ -44,7 +44,7 @@ negative = "aqm:defect:tableau-t"
 id = "AQ-06"
 level = "build"
 suite = "aqm"
-statement = "Tropical (min, +) and (max, +) semiring contractions compute circuit causal lightcones, MPS contraction orderings, and surface-code QEC syndrome recovery paths."
+statement = "Tropical (min, +) and (max, +) semiring contractions compute circuit causal lightcones, MPS contraction orderings, and multi-fault QEC syndrome recovery paths."
 failure = "StabilizerError::AnticommutingStabilizerGenerator"
 negative = "aqm:defect:anticommute"
 
@@ -52,7 +52,7 @@ negative = "aqm:defect:anticommute"
 id = "AQ-07"
 level = "build"
 suite = "aqm"
-statement = "DeterministicInputJournal and 64-frame RollbackSession record Born-rule collapses in a SHA-256 chain, refuse unseeded or post-collapse invalid writes, and round-trip #vdnt= URLs."
+statement = "DeterministicInputJournal and RollbackSession record Born-rule collapses in a SHA-256 chain, refuse unseeded or post-collapse invalid writes, and round-trip #vdnt= URLs."
 failure = "MeasurementJournalError::CollapsedRegisterWrite"
 negative = "aqm:defect:collapsed-write"
 
@@ -60,15 +60,15 @@ negative = "aqm:defect:collapsed-write"
 id = "AQ-08"
 level = "build"
 suite = "aqm"
-statement = "Progressive UORC-SHA256-CHAIN-v1 packer streams LOD0 Bloch summaries through LOD4 lossless cyclotomic/tableau states and shards 2-of-3 Stitch XOR parity fragments."
+statement = "Progressive UORC-SHA256-CHAIN-v1 packer streams LOD0 Bloch summaries through LOD4 lossless states, enforces OrderRope lossless challenger admission, and shards 2-of-3 Stitch XOR parity."
 failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
-negative = "aqm:defect:uorc-tamper"
+negative = "aqm:defect:uorc-lossy"
 
 [[capabilities]]
 id = "AQ-09"
 level = "build"
 suite = "aqm"
-statement = "CodedSlmDirector routes natural-language intents via 4-bit nibble zero-decode contractions and blocks invariant-violating proposals under DenialWins."
+statement = "CodedSlmDirector routes natural-language intents via 4-bit nibble zero-decode contractions across all four backends and blocks invariant-violating proposals under DenialWins."
 failure = "UnitaryInvariantError::WireLinearityBroken"
 negative = "aqm:defect:slm-cloning"
 
@@ -76,6 +76,54 @@ negative = "aqm:defect:slm-cloning"
 id = "AQ-10"
 level = "build"
 suite = "aqm"
-statement = "Spatial 3D Studio renders Bloch manifolds and rotated surface-code lattices identically across WebGL2 PBR and deterministic 16x16 software tile rasterization."
+statement = "Spatial 3D Studio renders Bloch manifolds and parametric rotated surface-code lattices identically across WebGL2 PBR and deterministic 16x16 software tile rasterization."
 failure = "TensorComputeError::InvalidTileDimensions"
 negative = "aqm:defect:tile-misaligned"
+
+[[capabilities]]
+id = "AQ-11"
+level = "build"
+suite = "aqm"
+statement = "Exact cyclotomic Z[zeta_8] Matrix Product State (ExactMps) tensor-train engine contracts 100-1,024+ qubit low-entanglement non-Clifford circuits with exact Gaussian rank compression."
+failure = "UnitaryInvariantError::NormConservationViolated"
+negative = "aqm:defect:nonunitary"
+
+[[capabilities]]
+id = "AQ-12"
+level = "build"
+suite = "aqm"
+statement = "Parametric odd-distance [[d^2, 1, d]] rotated surface-code lattice (d = 3, 5, 7, 9+) verifies symplectic commutativity, decodes multi-fault weights <= floor((d-1)/2), and refuses even distances."
+failure = "StabilizerError::EvenSurfaceCodeDistance"
+negative = "aqm:defect:even-distance"
+
+[[capabilities]]
+id = "AQ-13"
+level = "build"
+suite = "aqm"
+statement = "UOR Atlas (q=4, T=3, O=8) holospace verifies 96 classes, reflection generators (sigma, tau, mu), and phase-exact pointed MTC C(Z_3 x Z_2^3, q) Pentagon, Hexagon, Balancing, and (ST)^3 = p^+ S^2 axioms."
+failure = "AtlasBraidError::MtcAxiomResidualExceeded"
+negative = "aqm:defect:atlas-params"
+
+[[capabilities]]
+id = "AQ-14"
+level = "build"
+suite = "aqm"
+statement = "OpenQASM 2.0 SkWeaver compiles discrete Clifford+T and continuous rotation circuits into Verified PU(22) ZXZ Euler braids with measured SU(2) operator residual and refuses continuous angles on Clifford carriers."
+failure = "AtlasBraidError::NonDiscreteAngleOnCliffordCarrier"
+negative = "aqm:defect:clifford-angle"
+
+[[capabilities]]
+id = "AQ-15"
+level = "build"
+suite = "aqm"
+statement = "Hologram v4 VerdantAqm.holo archive embeds a BLAKE3-sealed APP_MANIFEST and a real zero-import wasm32 guest (memory, holo_alloc, holo_run) executed via WebAssembly.Instance."
+failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
+negative = "aqm:defect:oob"
+
+[[capabilities]]
+id = "AQ-16"
+level = "build"
+suite = "aqm"
+statement = "uor-matmul zero-decode kernels (Grid<16>, Packed<Grid<16>, 2>, Runs<Grid<16>, 16>) contract in 128-bit BigInt accumulators without float decode, paired with UTQC Row-Honesty ledger enforcement."
+failure = "HonestyVerdict::RefuseBenchMarkedAsProof"
+negative = "aqm:defect:honesty-inflation"

@@ -1,0 +1,14 @@
+name = "VerdantAqm"
+version = "0.2.0"
+
+[build]
+entrypoints = [
+  "src/Quantum.lex.tex",
+  "src/Architecture.lex.tex",
+  "src/Design.lex.tex",
+  "src/Features.lex.tex",
+  "src/Security.lex.tex",
+  "src/Quality.lex.tex",
+  "src/Compliance.lex.tex",
+  "src/Honesty.lex.tex",
+]

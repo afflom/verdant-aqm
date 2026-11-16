@@ -1,0 +1,103 @@
+\begin{lexlean}{Design}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.arch@1.0.0}
+\importmodule{Architecture}
+\title{Verdant AQM ISO 19450 OPM object-process model and OMG UML 2.5.1 interaction and state machines}
+
+\begin{semanticmodule}
+
+inductive{
+  name: OpmObject,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: circuitSpecification, fields: []},
+    {name: verifiedCircuitDag, fields: []},
+    {name: quantumMachineState, fields: []},
+    {name: measurementCollapseJournal, fields: []},
+    {name: surfaceSyndromeVector, fields: []},
+    {name: atlasBraidSchedule, fields: []},
+    {name: holoV4ArchiveBytes, fields: []}
+  ]
+}
+
+inductive{
+  name: OpmProcess,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: prismVerifyAndSchedule, fields: []},
+    {name: contractCodedSemiringStep, fields: []},
+    {name: recordBornCollapseAndRollback, fields: []},
+    {name: decodeTropicalMinPlusSyndrome, fields: []},
+    {name: weaveOpenQasmIntoAtlasBraid, fields: []},
+    {name: executeZeroImportHoloGuest, fields: []}
+  ]
+}
+
+inductive{
+  name: MachineLifecycleState,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: unverifiedDraft, fields: []},
+    {name: dagAdmitted, fields: []},
+    {name: coherentSuperposition, fields: []},
+    {name: projectiveCollapsed, fields: []},
+    {name: rolledBackRebranched, fields: []},
+    {name: invariantRefused, fields: []}
+  ]
+}
+
+definition{
+  name: validLifecycleTransition,
+  parameters: [src : MachineLifecycleState, dst : MachineLifecycleState],
+  result: Bool,
+  body: (match src
+    | MachineLifecycleState.unverifiedDraft =>
+        (match dst
+          | MachineLifecycleState.dagAdmitted => true
+          | MachineLifecycleState.invariantRefused => true
+          | _ => false)
+    | MachineLifecycleState.dagAdmitted =>
+        (match dst
+          | MachineLifecycleState.coherentSuperposition => true
+          | _ => false)
+    | MachineLifecycleState.coherentSuperposition =>
+        (match dst
+          | MachineLifecycleState.coherentSuperposition => true
+          | MachineLifecycleState.projectiveCollapsed => true
+          | MachineLifecycleState.rolledBackRebranched => true
+          | _ => false)
+    | MachineLifecycleState.projectiveCollapsed =>
+        (match dst
+          | MachineLifecycleState.rolledBackRebranched => true
+          | MachineLifecycleState.invariantRefused => true
+          | _ => false)
+    | MachineLifecycleState.rolledBackRebranched =>
+        (match dst
+          | MachineLifecycleState.coherentSuperposition => true
+          | MachineLifecycleState.projectiveCollapsed => true
+          | _ => false)
+    | MachineLifecycleState.invariantRefused =>
+        (match dst
+          | MachineLifecycleState.unverifiedDraft => true
+          | _ => false)),
+  axioms: []
+}
+
+theorem{
+  name: designValid,
+  statement: (((validLifecycleTransition
+      MachineLifecycleState.projectiveCollapsed
+      MachineLifecycleState.coherentSuperposition) = false)
+    ∧ ((validLifecycleTransition
+      MachineLifecycleState.projectiveCollapsed
+      MachineLifecycleState.rolledBackRebranched) = true)),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

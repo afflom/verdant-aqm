@@ -1,0 +1,21 @@
+[package]
+name = "verdant-aqm"
+version = "0.2.0"
+description = "Prism-verified unbounded Abstract Quantum Machine over UOR semiring tensors, exact cyclotomic MPS, bit-packed symplectic tableaus, parametric surface codes, and Atlas topological holospace"
+authors = ["Verdant AQM Architecture"]
+license = "Apache-2.0"
+
+[prism]
+edition = "2026"
+holo_version = 4
+guest_world = "hologram:guest/core-wasm@1"
+zero_magic_literals = true
+no_classical_choice = true
+
+[dependencies]
+prism-foundation = "1.0.0"
+prism-arch = "1.0.0"
+prism-sec = "1.0.0"
+prism-qual = "1.0.0"
+uor-matmul = "0.4.0"
+uorc = "0.4.0"

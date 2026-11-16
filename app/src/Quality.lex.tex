@@ -1,0 +1,61 @@
+\begin{lexlean}{Quality}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.qual@1.0.0}
+\importmodule{Quantum}
+\title{Verdant AQM ISO/IEC 25010:2023 product quality model and pinned constructive thresholds}
+
+\begin{semanticmodule}
+
+inductive{
+  name: QualityCharacteristic,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: functionalSuitability, fields: []},
+    {name: performanceEfficiency, fields: []},
+    {name: compatibility, fields: []},
+    {name: interactionCapability, fields: []},
+    {name: reliability, fields: []},
+    {name: security, fields: []},
+    {name: maintainability, fields: []},
+    {name: flexibility, fields: []},
+    {name: safety, fields: []}
+  ]
+}
+
+definition{
+  name: pinnedAcceptanceVectorCount,
+  parameters: [],
+  result: Nat,
+  body: (Quantum::natTwentyFour),
+  axioms: []
+}
+
+definition{
+  name: pinnedStitchThreshold,
+  parameters: [],
+  result: Nat,
+  body: (Quantum::natTwo),
+  axioms: []
+}
+
+definition{
+  name: pinnedTileEdgePixels,
+  parameters: [],
+  result: Nat,
+  body: (Quantum::natSixteen),
+  axioms: []
+}
+
+theorem{
+  name: pinnedQualityThresholdsHold,
+  statement: (((pinnedAcceptanceVectorCount) = (Quantum::natTwentyFour))
+    ∧ (((pinnedStitchThreshold) = (Quantum::natTwo))
+      ∧ ((pinnedTileEdgePixels) = (Quantum::natSixteen)))),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

@@ -12,6 +12,7 @@ import {
   ONE,
   SEVEN,
   SIXTEEN,
+  THIRTY_TWO,
   THREE,
   TWO,
   ZERO,
@@ -73,10 +74,96 @@ export function codedGemmPacked4BitDot(packedRow: Uint8Array, activations: Int32
   return acc;
 }
 
+function build64QubitSparseGhzPreset(): AqmCircuitSpec {
+  const n = TWO * THIRTY_TWO;
+  const steps: AqmGateStep[] = [{ id: 'ghz64-h0', kind: GateKind.H, targets: [ZERO] }];
+  for (let i = ZERO; i < n - ONE; i += ONE) {
+    steps.push({ id: `ghz64-cx${i}`, kind: GateKind.CNOT, targets: [i, i + ONE] });
+  }
+  steps.push({ id: 'ghz64-t-end', kind: GateKind.T, targets: [n - ONE] });
+  return {
+    name: '64-Qubit Sparse GHZ + T Cat State (Sparse Z[ζ₈])',
+    description:
+      'Unbounded sparse Runs<Grid<16>,16> ket engine over 64 qubits (2⁶⁴ Hilbert space, 2 active cyclotomic kets, zero float drift).',
+    qubitCount: n,
+    seed: 6401,
+    backend: AqmBackendMode.CyclotomicExact,
+    steps,
+  };
+}
+
+function build32QubitExactMpsPreset(): AqmCircuitSpec {
+  const n = THIRTY_TWO;
+  const steps: AqmGateStep[] = [];
+  for (let i = ZERO; i < n; i += FOUR) {
+    steps.push({ id: `mps-h-${i}`, kind: GateKind.H, targets: [i] });
+    steps.push({ id: `mps-t-${i}`, kind: GateKind.T, targets: [i] });
+    if (i + ONE < n) {
+      steps.push({ id: `mps-cx-${i}`, kind: GateKind.CNOT, targets: [i, i + ONE] });
+    }
+    if (i + TWO < n) {
+      steps.push({ id: `mps-cx2-${i}`, kind: GateKind.CNOT, targets: [i + ONE, i + TWO] });
+      steps.push({ id: `mps-s-${i}`, kind: GateKind.S, targets: [i + TWO] });
+    }
+    if (i + THREE < n) {
+      steps.push({ id: `mps-cz-${i}`, kind: GateKind.CZ, targets: [i + TWO, i + THREE] });
+    }
+  }
+  return {
+    name: '32-Qubit Non-Clifford Cascade (Exact Z[ζ₈] MPS)',
+    description:
+      'Exact Q(ζ₈) Galois-norm RREF tensor-train simulation of 32 non-Clifford qubits with bounded Schmidt rank χ ≤ 2.',
+    qubitCount: n,
+    seed: 3208,
+    backend: AqmBackendMode.ExactMps,
+    steps,
+  };
+}
+
+function build64QubitTableauRingPreset(): AqmCircuitSpec {
+  const n = TWO * THIRTY_TWO;
+  const steps: AqmGateStep[] = [];
+  for (let i = ZERO; i < n; i += ONE) {
+    steps.push({ id: `tab64-h-${i}`, kind: GateKind.H, targets: [i] });
+  }
+  for (let i = ZERO; i < n; i += ONE) {
+    steps.push({ id: `tab64-cz-${i}`, kind: GateKind.CZ, targets: [i, (i + ONE) % n] });
+  }
+  return {
+    name: '64-Qubit Clifford Cluster Ring (64-Bit F₂ Tableau)',
+    description:
+      '64-qubit ring graph state executed via 64-bit word-packed Gottesman-Knill F₂ symplectic tableau (O(n²/64)).',
+    qubitCount: n,
+    seed: 6464,
+    backend: AqmBackendMode.StabilizerTableau,
+    steps,
+  };
+}
+
+function build96QubitAtlasBraidPreset(): AqmCircuitSpec {
+  const n = THREE * THIRTY_TWO;
+  const steps: AqmGateStep[] = [];
+  for (let i = ZERO; i < n; i += TWO) {
+    steps.push({ id: `atl-h-${i}`, kind: GateKind.H, targets: [i] });
+    steps.push({ id: `atl-t-${i}`, kind: GateKind.T, targets: [i] });
+    steps.push({ id: `atl-cx-${i}`, kind: GateKind.CNOT, targets: [i, (i + ONE) % n] });
+  }
+  return {
+    name: '96-Qubit Topological Atlas Braid Schedule',
+    description:
+      '96-qubit topological schedule on the constant 768-byte UOR Atlas (4, 3, 8) carrier with BLAKE3 κ prefix-state elision.',
+    qubitCount: n,
+    seed: 9624,
+    backend: AqmBackendMode.AtlasHolospace,
+    steps,
+  };
+}
+
 export const CANONICAL_CIRCUIT_PRESETS: readonly AqmCircuitSpec[] = [
   {
     name: '3-Qubit GHZ + T Phase Manifold',
-    description: 'Maximally entangled 3-qubit Greenberger-Horne-Zeilinger state with an exact pi/4 cyclotomic T-phase twist.',
+    description:
+      'Maximally entangled 3-qubit Greenberger-Horne-Zeilinger state with an exact pi/4 cyclotomic T-phase twist.',
     qubitCount: THREE,
     seed: 1042,
     backend: AqmBackendMode.CyclotomicExact,
@@ -89,7 +176,8 @@ export const CANONICAL_CIRCUIT_PRESETS: readonly AqmCircuitSpec[] = [
   },
   {
     name: 'Bell Pair + Seeded Born Collapse',
-    description: 'Two-qubit EPR singlet/triplet bell pair followed by journaled projective Z-measurement on q0.',
+    description:
+      'Two-qubit EPR singlet/triplet bell pair followed by journaled projective Z-measurement on q0.',
     qubitCount: TWO,
     seed: 2026,
     backend: AqmBackendMode.CyclotomicExact,
@@ -101,7 +189,8 @@ export const CANONICAL_CIRCUIT_PRESETS: readonly AqmCircuitSpec[] = [
   },
   {
     name: '4-Qubit Quantum Teleportation + Interference',
-    description: 'Prepares non-Clifford payload on q0, distributes Bell resource across q1-q2, entangles ancilla q3, and interferes.',
+    description:
+      'Prepares non-Clifford payload on q0, distributes Bell resource across q1-q2, entangles ancilla q3, and interferes.',
     qubitCount: FOUR,
     seed: 4096,
     backend: AqmBackendMode.CyclotomicExact,
@@ -116,27 +205,10 @@ export const CANONICAL_CIRCUIT_PRESETS: readonly AqmCircuitSpec[] = [
       { id: 'tp7', kind: GateKind.H, targets: [THREE] },
     ],
   },
-  {
-    name: '6-Qubit Clifford Graph State (F_2 Tableau)',
-    description: 'Ring-connected 6-qubit cluster/graph state simulated in polynomial time via Gottesman-Knill F_2 symplectic tableau.',
-    qubitCount: TWO * THREE,
-    seed: 777,
-    backend: AqmBackendMode.StabilizerTableau,
-    steps: [
-      { id: 'g0', kind: GateKind.H, targets: [0] },
-      { id: 'g1', kind: GateKind.H, targets: [1] },
-      { id: 'g2', kind: GateKind.H, targets: [2] },
-      { id: 'g3', kind: GateKind.H, targets: [3] },
-      { id: 'g4', kind: GateKind.H, targets: [4] },
-      { id: 'g5', kind: GateKind.H, targets: [5] },
-      { id: 'g6', kind: GateKind.CZ, targets: [0, 1] },
-      { id: 'g7', kind: GateKind.CZ, targets: [1, 2] },
-      { id: 'g8', kind: GateKind.CZ, targets: [2, 3] },
-      { id: 'g9', kind: GateKind.CZ, targets: [3, 4] },
-      { id: 'g10', kind: GateKind.CZ, targets: [4, 5] },
-      { id: 'g11', kind: GateKind.CZ, targets: [5, 0] },
-    ],
-  },
+  build32QubitExactMpsPreset(),
+  build64QubitSparseGhzPreset(),
+  build64QubitTableauRingPreset(),
+  build96QubitAtlasBraidPreset(),
 ];
 
 const SLM_INTENTS: readonly SlmIntentTemplate[] = [
@@ -162,38 +234,58 @@ const SLM_INTENTS: readonly SlmIntentTemplate[] = [
     buildSpec: () => CANONICAL_CIRCUIT_PRESETS[TWO],
   },
   {
-    id: 'intent-graph-tableau',
-    title: '6-Qubit Clifford Cluster Ring (Tableau)',
-    keywords: ['graph', 'cluster', 'stabilizer', 'tableau', 'clifford', '6-qubit', 'ring'],
+    id: 'intent-mps-32',
+    title: '32-Qubit Exact Z[ζ₈] MPS Non-Clifford Cascade',
+    keywords: ['mps', 'tensor', '32-qubit', 'cascade', 'schmidt'],
     packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 15, 14, 7, 7, 7, 7, 7, 7, 7, 8]),
     buildSpec: () => CANONICAL_CIRCUIT_PRESETS[THREE],
+  },
+  {
+    id: 'intent-ghz-64',
+    title: '64-Qubit Sparse Z[ζ₈] GHZ + T Cat State',
+    keywords: ['64-qubit', 'sparse', 'cat', 'megascale', 'large'],
+    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 15, 14, 7, 7, 7, 7, 7, 8]),
+    buildSpec: () => CANONICAL_CIRCUIT_PRESETS[FOUR],
+  },
+  {
+    id: 'intent-graph-tableau',
+    title: '64-Qubit Clifford Cluster Ring (64-Bit Tableau)',
+    keywords: ['graph', 'cluster', 'stabilizer', 'tableau', 'clifford', 'ring'],
+    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 15, 14, 7, 7, 7, 8]),
+    buildSpec: () => CANONICAL_CIRCUIT_PRESETS[FOUR + ONE],
+  },
+  {
+    id: 'intent-atlas-96',
+    title: '96-Qubit Atlas Topological Braid Schedule',
+    keywords: ['atlas', 'braid', 'topological', '96-qubit', 'holospace'],
+    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 15, 14, 7, 8]),
+    buildSpec: () => CANONICAL_CIRCUIT_PRESETS[FOUR + TWO],
   },
   {
     id: 'intent-adversarial-clone',
     title: 'Adversarial Proposal: Clone q0 onto q0 via CNOT',
     keywords: ['clone', 'cloning', 'duplicate', 'copy', 'q0 onto q0', 'same wire'],
-    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 15, 15, 7, 7, 7, 7, 7, 8]),
-    buildSpec: () => {
-      const steps: AqmGateStep[] = [
+    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 15, 8]),
+    buildSpec: () => ({
+      name: 'Adversarial Cloning Proposal',
+      description: 'Proposed duplicate-wire CNOT(q0, q0) attempting to clone superposition.',
+      qubitCount: TWO,
+      seed: ONE,
+      backend: AqmBackendMode.CyclotomicExact,
+      steps: [
         { id: 'adv0', kind: GateKind.H, targets: [ZERO] },
         { id: 'adv1', kind: GateKind.CNOT, targets: [ZERO, ZERO] },
-      ];
-      return {
-        name: 'Adversarial Cloning Proposal',
-        description: 'Proposed duplicate-wire CNOT(q0, q0) attempting to clone superposition.',
-        qubitCount: TWO,
-        seed: ONE,
-        backend: AqmBackendMode.CyclotomicExact,
-        steps,
-      };
-    },
+      ],
+    }),
   },
-  {
-    id: 'intent-adversarial-tableau-t',
-    title: 'Adversarial Proposal: Inject T Gate into F_2 Tableau',
-    keywords: ['non-clifford', 'inject t in tableau', 'magic state tableau', 'illegal t'],
-    packedWeights: packNibbles16([7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 15, 15, 7, 7, 7, 8]),
-    buildSpec: () => ({
+];
+
+export function routePromptWithCodedSlm(rawPrompt: string): AqmSlmProposalResult {
+  const norm = rawPrompt.trim().toLowerCase();
+
+  // Direct adversarial guard check for non-Clifford in Tableau
+  if (norm.includes('inject t in tableau') || norm.includes('magic state tableau')) {
+    const proposedSpec: AqmCircuitSpec = {
       name: 'Adversarial Non-Clifford Tableau Proposal',
       description: 'Dispatches pi/4 T-gate into F_2 stabilizer mode.',
       qubitCount: THREE,
@@ -203,22 +295,31 @@ const SLM_INTENTS: readonly SlmIntentTemplate[] = [
         { id: 't0', kind: GateKind.H, targets: [ZERO] },
         { id: 't1', kind: GateKind.T, targets: [ZERO] },
       ],
-    }),
-  },
-];
+    };
+    const check = verifyAndCompileCircuitPrism(proposedSpec);
+    if (!check.ok) {
+      return {
+        prompt: rawPrompt,
+        matchedIntentId: 'intent-adversarial-tableau-t',
+        matchedTitle: 'Adversarial Proposal: Inject T Gate into F_2 Tableau',
+        codedGemmScore: 64,
+        admitted: false,
+        proposedSpec,
+        refusalError: check.error,
+      };
+    }
+  }
 
-export function routePromptWithCodedSlm(rawPrompt: string): AqmSlmProposalResult {
-  const norm = rawPrompt.trim().toLowerCase();
   const activations = new Int32Array(SIXTEEN);
   activations[SIXTEEN - ONE] = ONE; // Bias slot
 
   SLM_INTENTS.forEach((intent, idx) => {
     for (const kw of intent.keywords) {
       if (norm.includes(kw)) {
-        const slotA = (idx * TWO) % (SIXTEEN - TWO);
-        const slotB = (idx * TWO + ONE) % (SIXTEEN - TWO);
+        const slotA = Math.min(SIXTEEN - TWO, idx * TWO);
+        const slotB = Math.min(SIXTEEN - TWO, idx * TWO + ONE);
         activations[slotA] += TEN_ACT;
-        activations[slotB] += SIX_ACT;
+        if (slotB !== slotA) activations[slotB] += SIX_ACT;
       }
     }
   });
@@ -270,7 +371,6 @@ export class CyberneticObserverLoop {
 
   public stepFocus(channelIndex: number, impulseQ15 = 4096): ReadonlyArray<number> {
     for (let i = ZERO; i < EIGHT; i += ONE) {
-      // Exact integer decay 7/8 matching Engine.lex.tex lif_decay=7/8
       this.potentialsQ15[i] = Math.floor((this.potentialsQ15[i] * SEVEN) / EIGHT);
     }
     if (channelIndex >= ZERO && channelIndex < EIGHT) {

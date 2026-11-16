@@ -1,0 +1,69 @@
+\begin{lexlean}{Features}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.arch@1.0.0}
+\importmodule{Architecture}
+\title{Verdant AQM capability register AQ-01..AQ-16 and stakeholder journey coverage}
+
+\begin{semanticmodule}
+
+inductive{
+  name: CapabilityId,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: aq01ConstructiveStratum0, fields: []},
+    {name: aq02WireLinearityNoCloning, fields: []},
+    {name: aq03KahnAcyclicCircuitDag, fields: []},
+    {name: aq04SparseCyclotomicExact, fields: []},
+    {name: aq05BitPackedSymplecticTableau, fields: []},
+    {name: aq06TropicalLightconeAndQec, fields: []},
+    {name: aq07JournalRollbackAndVdntUrl, fields: []},
+    {name: aq08UorcProgressiveAndStitch, fields: []},
+    {name: aq09CodedSlmDenialWins, fields: []},
+    {name: aq10DualWebgl2AndTile16Bench, fields: []},
+    {name: aq11ExactCyclotomicMpsTrain, fields: []},
+    {name: aq12ParametricOddSurfaceCode, fields: []},
+    {name: aq13AtlasMtcAndHoloBraid, fields: []},
+    {name: aq14OpenQasmSkWeaverCompiler, fields: []},
+    {name: aq15HoloV4RealCoreWasmGuest, fields: []},
+    {name: aq16ZeroDecodeMatmulAndHonesty, fields: []}
+  ]
+}
+
+definition{
+  name: capabilityOwnerStakeholder,
+  parameters: [cap : CapabilityId],
+  result: Stakeholder,
+  body: (match cap
+    | CapabilityId.aq01ConstructiveStratum0 => Stakeholder.formalVerificationAuditor
+    | CapabilityId.aq02WireLinearityNoCloning => Stakeholder.formalVerificationAuditor
+    | CapabilityId.aq03KahnAcyclicCircuitDag => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq04SparseCyclotomicExact => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq05BitPackedSymplecticTableau => Stakeholder.qecTopologicalResearcher
+    | CapabilityId.aq06TropicalLightconeAndQec => Stakeholder.qecTopologicalResearcher
+    | CapabilityId.aq07JournalRollbackAndVdntUrl => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq08UorcProgressiveAndStitch => Stakeholder.browserRuntimeOperator
+    | CapabilityId.aq09CodedSlmDenialWins => Stakeholder.formalVerificationAuditor
+    | CapabilityId.aq10DualWebgl2AndTile16Bench => Stakeholder.browserRuntimeOperator
+    | CapabilityId.aq11ExactCyclotomicMpsTrain => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq12ParametricOddSurfaceCode => Stakeholder.qecTopologicalResearcher
+    | CapabilityId.aq13AtlasMtcAndHoloBraid => Stakeholder.qecTopologicalResearcher
+    | CapabilityId.aq14OpenQasmSkWeaverCompiler => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq15HoloV4RealCoreWasmGuest => Stakeholder.formalVerificationAuditor
+    | CapabilityId.aq16ZeroDecodeMatmulAndHonesty => Stakeholder.formalVerificationAuditor),
+  axioms: []
+}
+
+theorem{
+  name: everyFeatureJourneyed,
+  statement: (((capabilityOwnerStakeholder CapabilityId.aq13AtlasMtcAndHoloBraid)
+      = Stakeholder.qecTopologicalResearcher)
+    ∧ ((capabilityOwnerStakeholder CapabilityId.aq15HoloV4RealCoreWasmGuest)
+      = Stakeholder.formalVerificationAuditor)),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

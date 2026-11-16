@@ -1,20 +1,35 @@
 /**
- * Stratum 2–4 — DeterministicInputJournal, 64-Frame RollbackSession, #vdnt= Snapshot URLs,
- * Progressive UORC-SHA256-CHAIN-v1 Packer, and Stitch 2-of-3 XOR Parity Custody (`journal.ts`)
+ * Stratum 2–4 — DeterministicInputJournal, Multi-Backend RollbackSession (CyclotomicExact, ExactMps,
+ * StabilizerTableau, AtlasHolospace), #vdnt= Snapshot URLs, Progressive UORC-SHA256-CHAIN-v1 Packer,
+ * and Stitch 2-of-3 XOR Parity Custody (`journal.ts`)
  */
 
+import {
+  AtlasHolospaceMachineState,
+  createInitialAtlasState,
+  inspectAtlasState,
+  stepAtlasHolospace,
+} from './atlasUtqc';
 import {
   CyclotomicMachineState,
   createInitialCyclotomicState,
   inspectCyclotomicState,
   stepCyclotomicGate,
 } from './cyclotomic';
+import {
+  ExactMpsState,
+  createInitialExactMps,
+  inspectExactMpsState,
+  stepExactMpsGate,
+} from './mps';
 import { verifyAndCompileCircuitPrism } from './prismKernel';
 import { bytesToHex, sha256Bytes, sha256Hex } from './sha256';
 import {
   SymplecticTableau,
   createInitialTableau,
   formatStabilizerGenerators,
+  getTableauX,
+  getTableauZ,
   inspectStabilizerBlochVectors,
   stepStabilizerTableau,
   verifyStabilizersCommute,
@@ -23,7 +38,6 @@ import {
   EIGHT,
   FOUR,
   ONE,
-  ROLLBACK_WINDOW_FRAMES,
   SNAPSHOT_URL_MAX_BYTES,
   SIXTEEN,
   THIRTY_TWO,
@@ -43,6 +57,9 @@ import {
   ForcedCollapseBranch,
   ModeledAqmError,
 } from './types';
+
+/** Interactive rollback journal supports up to 256 reversible/journaled frames */
+const INTERACTIVE_SESSION_MAX_STEPS = pow2Constructive(EIGHT);
 
 export interface JournalEntry {
   readonly frameIndex: number;
@@ -65,7 +82,10 @@ export interface AqmFrameSnapshot {
   readonly cursor: number;
   readonly chainDigest: string;
   readonly cyclotomic?: CyclotomicMachineState;
+  readonly mps?: ExactMpsState;
   readonly tableau?: SymplecticTableau;
+  readonly atlas?: AtlasHolospaceMachineState;
+  readonly mpsBondDimensions: readonly number[];
   readonly blochVectors: readonly BlochVector[];
   readonly entanglementEdges: readonly EntanglementEdge[];
   readonly basisAmplitudes: readonly BasisAmplitudeSummary[];
@@ -103,6 +123,27 @@ function buildFrameFromCyclotomic(
     cursor,
     chainDigest,
     cyclotomic: state,
+    mpsBondDimensions: state.mpsBondRanks,
+    blochVectors: inspected.blochVectors,
+    entanglementEdges: inspected.entanglementEdges,
+    basisAmplitudes: inspected.basisAmplitudes,
+    stabilizerGenerators: [],
+    stabilizersCommute: true,
+    conservation: inspected.conservation,
+  };
+}
+
+function buildFrameFromMps(
+  cursor: number,
+  chainDigest: string,
+  state: ExactMpsState,
+): AqmFrameSnapshot {
+  const inspected = inspectExactMpsState(state);
+  return {
+    cursor,
+    chainDigest,
+    mps: state,
+    mpsBondDimensions: inspected.bondDimensions,
     blochVectors: inspected.blochVectors,
     entanglementEdges: inspected.entanglementEdges,
     basisAmplitudes: inspected.basisAmplitudes,
@@ -118,19 +159,23 @@ function buildFrameFromTableau(
   tab: SymplecticTableau,
 ): AqmFrameSnapshot {
   const bloch = inspectStabilizerBlochVectors(tab);
-  const gens = formatStabilizerGenerators(tab);
+  const gens = formatStabilizerGenerators(tab, SIXTEEN);
   const comm = verifyStabilizersCommute(tab);
 
-  // Pairwise entanglement heuristic in tableau mode: wires that are mixed (purity < 1) and share stabilizer support
+  // Pairwise entanglement scan over visible focus window (<= 24 wires) using 64-bit word accessors
   const edges: EntanglementEdge[] = [];
-  for (let a = ZERO; a < tab.n; a += ONE) {
-    for (let b = a + ONE; b < tab.n; b += ONE) {
+  const pairLimit = Math.min(tab.n, THREE * EIGHT);
+  for (let a = ZERO; a < pairLimit; a += ONE) {
+    for (let b = a + ONE; b < pairLimit; b += ONE) {
       if (bloch[a].purity < 0.99 && bloch[b].purity < 0.99) {
         let shared = ZERO;
         for (let row = tab.n; row < TWO * tab.n; row += ONE) {
-          const suppA = tab.x[row * tab.n + a] | tab.z[row * tab.n + a];
-          const suppB = tab.x[row * tab.n + b] | tab.z[row * tab.n + b];
-          if (suppA === ONE && suppB === ONE) shared += ONE;
+          const suppA = getTableauX(tab, row, a) | getTableauZ(tab, row, a);
+          const suppB = getTableauX(tab, row, b) | getTableauZ(tab, row, b);
+          if (suppA === ONE && suppB === ONE) {
+            shared += ONE;
+            if (shared >= TWO) break;
+          }
         }
         if (shared > ZERO) {
           edges.push({
@@ -147,6 +192,7 @@ function buildFrameFromTableau(
     cursor,
     chainDigest,
     tableau: tab,
+    mpsBondDimensions: [ONE],
     blochVectors: bloch,
     entanglementEdges: edges,
     basisAmplitudes: [],
@@ -155,7 +201,7 @@ function buildFrameFromTableau(
     conservation: {
       rationalNumerator: '1',
       rootTwoCoefficient: '0',
-      scaleDenominator: '1',
+      scaleDenominator: `1 (F₂ ${tab.wordsPerRow}×64b)`,
       normExactOne: comm.commutes,
       bijectiveWiresVerified: true,
       tropicalTerminalReachable: true,
@@ -163,8 +209,29 @@ function buildFrameFromTableau(
   };
 }
 
+function buildFrameFromAtlas(
+  cursor: number,
+  chainDigest: string,
+  state: AtlasHolospaceMachineState,
+): AqmFrameSnapshot {
+  const inspected = inspectAtlasState(state);
+  return {
+    cursor,
+    chainDigest,
+    atlas: state,
+    mpsBondDimensions: [state.carrierRe.length],
+    blochVectors: inspected.blochVectors,
+    entanglementEdges: inspected.entanglementEdges,
+    basisAmplitudes: inspected.basisAmplitudes,
+    stabilizerGenerators: [],
+    stabilizersCommute: true,
+    conservation: inspected.conservation,
+  };
+}
+
 /**
- * Compiles and executes up to `ROLLBACK_WINDOW_FRAMES` (64) reversible/journaled frames
+ * Compiles and executes reversible/journaled frames across all 4 Prism AQM backends
+ * (`CyclotomicExact`, `ExactMps`, `StabilizerTableau`, `AtlasHolospace`),
  * so stepping backward or re-branching any measurement collapse is instant and bit-identical.
  */
 export function executeCircuitRollbackSession(
@@ -175,7 +242,7 @@ export function executeCircuitRollbackSession(
     return compiled;
   }
 
-  const maxSteps = Math.min(spec.steps.length, ROLLBACK_WINDOW_FRAMES - ONE);
+  const maxSteps = Math.min(spec.steps.length, INTERACTIVE_SESSION_MAX_STEPS);
   let chainTip = sha256Hex(
     `VDNT-GENESIS:${spec.name}:n=${spec.qubitCount}:seed=${spec.seed}:backend=${spec.backend}`,
   );
@@ -183,9 +250,13 @@ export function executeCircuitRollbackSession(
   const frames: AqmFrameSnapshot[] = [];
   const journal: JournalEntry[] = [];
 
+  // For megascale circuits (n > 24 and steps > 32), compute lightweight intermediate frames and full initial + terminal inspection
+  const lightweightIntermediate = spec.qubitCount > THREE * EIGHT && maxSteps > THIRTY_TWO;
+
   if (spec.backend === AqmBackendMode.CyclotomicExact) {
     let curState = createInitialCyclotomicState(spec.qubitCount);
-    frames.push(buildFrameFromCyclotomic(ZERO, chainTip, curState));
+    const genesisFrame = buildFrameFromCyclotomic(ZERO, chainTip, curState);
+    frames.push(genesisFrame);
 
     for (let i = ZERO; i < maxSteps; i += ONE) {
       const step = spec.steps[i];
@@ -208,9 +279,55 @@ export function executeCircuitRollbackSession(
         chainDigest: chainTip,
         measurement: res.measurementOutcome,
       });
-      frames.push(buildFrameFromCyclotomic(i + ONE, chainTip, curState));
+      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+        frames.push(buildFrameFromCyclotomic(i + ONE, chainTip, curState));
+      } else {
+        frames.push({
+          ...frames[frames.length - ONE],
+          cursor: i + ONE,
+          chainDigest: chainTip,
+          cyclotomic: curState,
+          mpsBondDimensions: curState.mpsBondRanks,
+        });
+      }
     }
-  } else {
+  } else if (spec.backend === AqmBackendMode.ExactMps) {
+    let curMps = createInitialExactMps(spec.qubitCount);
+    frames.push(buildFrameFromMps(ZERO, chainTip, curMps));
+
+    for (let i = ZERO; i < maxSteps; i += ONE) {
+      const step = spec.steps[i];
+      const draw = deterministicBornDraw(spec.seed, i, step.targets[ZERO]);
+      const res = stepExactMpsGate(curMps, step, draw);
+      curMps = res.nextState;
+
+      const prevDigest = chainTip;
+      const stepRecord = res.measurementOutcome
+        ? `${step.kind}(q${step.targets[ZERO]})->${res.measurementOutcome.outcome}[${res.measurementOutcome.branchMode}]`
+        : `${step.kind}(${step.targets.map((w) => `q${w}`).join(',')})`;
+      chainTip = sha256Hex(`${prevDigest}|${i}|${stepRecord}`);
+
+      journal.push({
+        frameIndex: i + ONE,
+        stepIndex: i,
+        stepId: step.id,
+        summary: stepRecord,
+        prevChainDigest: prevDigest,
+        chainDigest: chainTip,
+        measurement: res.measurementOutcome,
+      });
+      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+        frames.push(buildFrameFromMps(i + ONE, chainTip, curMps));
+      } else {
+        frames.push({
+          ...frames[frames.length - ONE],
+          cursor: i + ONE,
+          chainDigest: chainTip,
+          mps: curMps,
+        });
+      }
+    }
+  } else if (spec.backend === AqmBackendMode.StabilizerTableau) {
     let curTab = createInitialTableau(spec.qubitCount);
     frames.push(buildFrameFromTableau(ZERO, chainTip, curTab));
 
@@ -235,7 +352,49 @@ export function executeCircuitRollbackSession(
         chainDigest: chainTip,
         measurement: res.measurementOutcome,
       });
-      frames.push(buildFrameFromTableau(i + ONE, chainTip, curTab));
+      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+        frames.push(buildFrameFromTableau(i + ONE, chainTip, curTab));
+      } else {
+        frames.push({
+          ...frames[frames.length - ONE],
+          cursor: i + ONE,
+          chainDigest: chainTip,
+          tableau: curTab,
+        });
+      }
+    }
+  } else {
+    let curAtlas = createInitialAtlasState(spec.qubitCount);
+    const cache = new Set<string>();
+    frames.push(buildFrameFromAtlas(ZERO, chainTip, curAtlas));
+
+    for (let i = ZERO; i < maxSteps; i += ONE) {
+      const step = spec.steps[i];
+      const res = stepAtlasHolospace(curAtlas, step, cache);
+      curAtlas = res.nextState;
+
+      const prevDigest = chainTip;
+      const stepRecord = `${step.kind}(${step.targets.map((w) => `q${w}`).join(',')})`;
+      chainTip = sha256Hex(`${prevDigest}|${i}|${stepRecord}`);
+
+      journal.push({
+        frameIndex: i + ONE,
+        stepIndex: i,
+        stepId: step.id,
+        summary: stepRecord,
+        prevChainDigest: prevDigest,
+        chainDigest: chainTip,
+      });
+      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+        frames.push(buildFrameFromAtlas(i + ONE, chainTip, curAtlas));
+      } else {
+        frames.push({
+          ...frames[frames.length - ONE],
+          cursor: i + ONE,
+          chainDigest: chainTip,
+          atlas: curAtlas,
+        });
+      }
     }
   }
 
@@ -338,6 +497,7 @@ export function packProgressiveUorcStream(
   spec: AqmCircuitSpec,
   frame: AqmFrameSnapshot,
 ): readonly UorcLodFrame[] {
+  const focusBloch = frame.blochVectors.slice(ZERO, SIXTEEN);
   const lodPayloads: Array<{
     lod: number;
     name: string;
@@ -351,10 +511,10 @@ export function packProgressiveUorcStream(
       name: 'LOD0 · Bloch & Wire Proxy',
       workUnits: TWO * (FOUR + ONE),
       lossless: false,
-      summary: `${spec.qubitCount} wires · Bloch vectors (${frame.blochVectors.map((b) => b.rz.toFixed(TWO)).join(', ')})`,
+      summary: `${spec.qubitCount} wires · Bloch focus (${focusBloch.map((b) => b.rz.toFixed(TWO)).join(', ')})`,
       data: {
         qubits: spec.qubitCount,
-        blochRz: frame.blochVectors.map((b) => Math.round(b.rz * 1000)),
+        blochRz: focusBloch.map((b) => Math.round(b.rz * 1000)),
       },
     },
     {
@@ -362,10 +522,10 @@ export function packProgressiveUorcStream(
       name: 'LOD1 · Entanglement Graph',
       workUnits: FOUR * (FOUR + ONE),
       lossless: false,
-      summary: `${frame.entanglementEdges.length} mutual-information edge(s) · full Bloch (rx, ry, rz)`,
+      summary: `${frame.entanglementEdges.length} mutual-information edge(s) · reduced Bloch coordinates`,
       data: {
-        bloch: frame.blochVectors,
-        edges: frame.entanglementEdges,
+        bloch: focusBloch,
+        edges: frame.entanglementEdges.slice(ZERO, SIXTEEN),
       },
     },
     {
@@ -384,8 +544,9 @@ export function packProgressiveUorcStream(
       name: 'LOD3 · Lossless Quantum State',
       workUnits: EIGHT * (FOUR + ONE),
       lossless: true,
-      summary: `Lossless ${spec.backend} amplitudes / tableau + k14 conservation ledger`,
+      summary: `Lossless ${spec.backend} state / OrderRope representation + k14 conservation ledger`,
       data: {
+        orderRopeKind: 'OrderRope',
         conservation: frame.conservation,
         exactBasis: frame.basisAmplitudes.map((a) => [a.bitstring, a.exactFormula]),
         generators: frame.stabilizerGenerators,
@@ -398,10 +559,11 @@ export function packProgressiveUorcStream(
       lossless: true,
       summary: `Complete circuit spec + MPS bond ranks + 3D manifold coordinates`,
       data: {
+        orderRopeKind: 'OrderRope',
         spec,
         cursor: frame.cursor,
         chainDigest: frame.chainDigest,
-        mpsBonds: frame.cyclotomic?.mpsBondRanks ?? [],
+        mpsBonds: frame.mpsBondDimensions,
       },
     },
   ];
@@ -521,7 +683,6 @@ export function reconstructFromStitchShards(
       r1[i] = bundle.shards[ZERO][i] ^ bundle.shards[TWO][i];
     }
   } else {
-    // available[1] && available[2]
     r1 = bundle.shards[ONE];
     r0 = new Uint8Array(len);
     for (let i = ZERO; i < len; i += ONE) {

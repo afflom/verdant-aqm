@@ -1,0 +1,109 @@
+\begin{lexlean}{Architecture}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.arch@1.0.0}
+\importmodule{Quantum}
+\title{Verdant AQM ISO/IEC/IEEE 42010 architecture description: stakeholders, concerns, components, and views}
+
+\begin{semanticmodule}
+
+inductive{
+  name: Stakeholder,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: quantumAlgorithmEngineer, fields: []},
+    {name: qecTopologicalResearcher, fields: []},
+    {name: formalVerificationAuditor, fields: []},
+    {name: browserRuntimeOperator, fields: []}
+  ]
+}
+
+inductive{
+  name: ArchitectureConcern,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: unboundedAlgebraicExactness, fields: []},
+    {name: noCloningAndDagCausality, fields: []},
+    {name: coreWasmZeroImportIsolation, fields: []},
+    {name: topologicalMtcCoherence, fields: []},
+    {name: losslessProgressiveCustody, fields: []},
+    {name: dualBackendSpatialParity, fields: []}
+  ]
+}
+
+inductive{
+  name: SystemComponent,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: prismKernelVerifier, fields: []},
+    {name: holoCoreWasmGuest, fields: []},
+    {name: sparseCyclotomicEngine, fields: []},
+    {name: exactMpsTensorTrain, fields: []},
+    {name: bitPackedSymplecticTableau, fields: []},
+    {name: atlasHolospaceWeaver, fields: []},
+    {name: tropicalSyndromeDecoder, fields: []},
+    {name: uorcStitchCustodyStream, fields: []},
+    {name: codedZeroDecodeMatmul, fields: []},
+    {name: spatialBenchViewport, fields: []}
+  ]
+}
+
+inductive{
+  name: ArchitectureViewKind,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: constructiveStrataView, fields: []},
+    {name: executionSubstrateView, fields: []},
+    {name: verificationBoundaryView, fields: []},
+    {name: custodyAndSpatialView, fields: []}
+  ]
+}
+
+definition{
+  name: concernAddressedByView,
+  parameters: [c : ArchitectureConcern],
+  result: ArchitectureViewKind,
+  body: (match c
+    | ArchitectureConcern.unboundedAlgebraicExactness => ArchitectureViewKind.executionSubstrateView
+    | ArchitectureConcern.noCloningAndDagCausality => ArchitectureViewKind.constructiveStrataView
+    | ArchitectureConcern.coreWasmZeroImportIsolation => ArchitectureViewKind.verificationBoundaryView
+    | ArchitectureConcern.topologicalMtcCoherence => ArchitectureViewKind.executionSubstrateView
+    | ArchitectureConcern.losslessProgressiveCustody => ArchitectureViewKind.custodyAndSpatialView
+    | ArchitectureConcern.dualBackendSpatialParity => ArchitectureViewKind.custodyAndSpatialView),
+  axioms: []
+}
+
+definition{
+  name: componentViewAssignment,
+  parameters: [comp : SystemComponent],
+  result: ArchitectureViewKind,
+  body: (match comp
+    | SystemComponent.prismKernelVerifier => ArchitectureViewKind.verificationBoundaryView
+    | SystemComponent.holoCoreWasmGuest => ArchitectureViewKind.verificationBoundaryView
+    | SystemComponent.sparseCyclotomicEngine => ArchitectureViewKind.executionSubstrateView
+    | SystemComponent.exactMpsTensorTrain => ArchitectureViewKind.executionSubstrateView
+    | SystemComponent.bitPackedSymplecticTableau => ArchitectureViewKind.executionSubstrateView
+    | SystemComponent.atlasHolospaceWeaver => ArchitectureViewKind.executionSubstrateView
+    | SystemComponent.tropicalSyndromeDecoder => ArchitectureViewKind.constructiveStrataView
+    | SystemComponent.uorcStitchCustodyStream => ArchitectureViewKind.custodyAndSpatialView
+    | SystemComponent.codedZeroDecodeMatmul => ArchitectureViewKind.constructiveStrataView
+    | SystemComponent.spatialBenchViewport => ArchitectureViewKind.custodyAndSpatialView),
+  axioms: []
+}
+
+theorem{
+  name: architectureValid,
+  statement: (((concernAddressedByView ArchitectureConcern.coreWasmZeroImportIsolation)
+      = ArchitectureViewKind.verificationBoundaryView)
+    ∧ ((componentViewAssignment SystemComponent.holoCoreWasmGuest)
+      = ArchitectureViewKind.verificationBoundaryView)),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

@@ -1,0 +1,63 @@
+\begin{lexlean}{Security}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\useglossary{prism.sec@1.0.0}
+\importmodule{Architecture}
+\title{Verdant AQM STRIDE threat model, zero-import Core-Wasm containment, and cryptographic custody controls}
+
+\begin{semanticmodule}
+
+inductive{
+  name: StrideCategory,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: spoofing, fields: []},
+    {name: tampering, fields: []},
+    {name: repudiation, fields: []},
+    {name: informationDisclosure, fields: []},
+    {name: denialOfService, fields: []},
+    {name: elevationOfPrivilege, fields: []}
+  ]
+}
+
+inductive{
+  name: SecurityControl,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: blake3HoloArchiveFooterAndKappa, fields: []},
+    {name: sha256ChainedJournalAndVdntHash, fields: []},
+    {name: boundedBuffer64ByteRequestCeiling, fields: []},
+    {name: zeroImportWasmGuestSandbox, fields: []},
+    {name: sparseAndMpsSubExponentialRepresentation, fields: []},
+    {name: denialWinsSlmInvariantGate, fields: []}
+  ]
+}
+
+definition{
+  name: primaryMitigationForStride,
+  parameters: [cat : StrideCategory],
+  result: SecurityControl,
+  body: (match cat
+    | StrideCategory.spoofing => SecurityControl.blake3HoloArchiveFooterAndKappa
+    | StrideCategory.tampering => SecurityControl.sha256ChainedJournalAndVdntHash
+    | StrideCategory.repudiation => SecurityControl.sha256ChainedJournalAndVdntHash
+    | StrideCategory.informationDisclosure => SecurityControl.zeroImportWasmGuestSandbox
+    | StrideCategory.denialOfService => SecurityControl.boundedBuffer64ByteRequestCeiling
+    | StrideCategory.elevationOfPrivilege => SecurityControl.denialWinsSlmInvariantGate),
+  axioms: []
+}
+
+theorem{
+  name: strideEnumerated,
+  statement: (((primaryMitigationForStride StrideCategory.spoofing)
+      = SecurityControl.blake3HoloArchiveFooterAndKappa)
+    ∧ ((primaryMitigationForStride StrideCategory.elevationOfPrivilege)
+      = SecurityControl.denialWinsSlmInvariantGate)),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

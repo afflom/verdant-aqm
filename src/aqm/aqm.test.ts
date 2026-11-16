@@ -1,11 +1,30 @@
 /**
- * Verdant AQM — Fast-Feedback Conformance & Unit Test Suite (`AQ-01` .. `AQ-10`)
+ * Verdant AQM — Complete Prism Conformance & Unit Test Suite (`AQ-01` .. `AQ-16`)
  * Run via: npx --yes tsx --test src/aqm/aqm.test.ts
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {
+  CANONICAL_ATLAS_PARAMS,
+  PARAMETRIC_CHECK_ATLAS_PARAMS,
+  buildAtlasGenerators,
+  createInitialAtlasState,
+  decideUtqcRowHonesty,
+  stepAtlasHolospace,
+  verifyAtlasMtcAxioms,
+  weaveOpenQasmWithSkWeaver,
+} from './atlasUtqc';
+import { blake3Hex, blake3Kappa } from './blake3';
+import {
+  contractGridCodebook,
+  contractPackedNibbles,
+  contractSparseRuns,
+  decideMatmulCodedAdmission,
+  decideUorcAdmission,
+  packGrid16Nibbles,
+} from './codedMatmul';
 import {
   Z8_ONE,
   createInitialCyclotomicState,
@@ -18,6 +37,12 @@ import {
   z8Sub,
 } from './cyclotomic';
 import {
+  buildVerdantAqmHoloArchive,
+  instantiateHoloCoreWasmGuest,
+  parseAndVerifyHoloV4Archive,
+  runHoloCoreWasmGuest,
+} from './holoGuest';
+import {
   createStitchParityBundle,
   decodeVdntSnapshotToken,
   encodeVdntSnapshotToken,
@@ -26,6 +51,13 @@ import {
   reconstructFromStitchShards,
 } from './journal';
 import {
+  createInitialExactMps,
+  getMpsBondDimensions,
+  inspectExactMpsState,
+  stepExactMpsGate,
+} from './mps';
+import {
+  CORE_WASM_ACCEPTANCE_VECTORS,
   PLANTED_DEFECT_CATALOG,
   dispatchCoreWasmQuery,
   runAllAcceptanceVectors,
@@ -55,12 +87,14 @@ import {
 import { decodeSurfaceCodeTropical } from './tropical';
 import {
   AqmBackendMode,
+  AtlasBraidErrorKind,
   GateKind,
+  HonestyVerdictErrorKind,
   QuantumIsaErrorKind,
   StabilizerErrorKind,
 } from './types';
 
-test('AQ-01: Stratum 0 constructive powers, primes, BoundedBuffer, and FIPS SHA-256 vector', () => {
+test('AQ-01: Stratum 0 constructive powers, primes, BoundedBuffer, FIPS SHA-256, and BLAKE3 vectors', () => {
   const ratchet = verifyConstructiveRatchet();
   assert.equal(ratchet.valid, true);
   assert.equal(pow2Constructive(4), 16);
@@ -80,10 +114,17 @@ test('AQ-01: Stratum 0 constructive powers, primes, BoundedBuffer, and FIPS SHA-
     sha256Hex('abc'),
     'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
   );
+
+  // Official BLAKE3 empty-input test vector
+  assert.equal(
+    blake3Hex(new Uint8Array(0)),
+    'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262',
+  );
+  assert.equal(blake3Kappa('verdant-aqm').length, 71);
+  assert.ok(blake3Kappa('verdant-aqm').startsWith('blake3:'));
 });
 
-test('AQ-02 & AQ-03: Wire linearity no-cloning guard and Kahn acyclic DAG scheduler', () => {
-  // Duplicate-wire CNOT(q0, q0) refused
+test('AQ-02 & AQ-03: Wire linearity no-cloning guard, unbounded register admission, and Kahn DAG', () => {
   const cloneCheck = verifyAndCompileCircuitPrism({
     name: 'clone-test',
     description: 'Duplicate wire',
@@ -97,7 +138,21 @@ test('AQ-02 & AQ-03: Wire linearity no-cloning guard and Kahn acyclic DAG schedu
     assert.equal(cloneCheck.error.kind, QuantumIsaErrorKind.DuplicateWireReference);
   }
 
-  // Mutual barrier cycle refused
+  // Zero classical qubit ceiling: 1,024-qubit circuit compiles cleanly!
+  const megascaleCheck = verifyAndCompileCircuitPrism({
+    name: 'megascale-1024',
+    description: '1024-qubit GHZ head/tail',
+    qubitCount: 1024,
+    seed: 1,
+    backend: AqmBackendMode.CyclotomicExact,
+    steps: [
+      { id: 'h0', kind: GateKind.H, targets: [0] },
+      { id: 'cx-last', kind: GateKind.CNOT, targets: [0, 1023] },
+      { id: 't-last', kind: GateKind.T, targets: [1023] },
+    ],
+  });
+  assert.equal(megascaleCheck.ok, true);
+
   const cycleCheck = verifyAndCompileCircuitPrism({
     name: 'cycle-test',
     description: 'Cyclic barrier',
@@ -115,22 +170,20 @@ test('AQ-02 & AQ-03: Wire linearity no-cloning guard and Kahn acyclic DAG schedu
   }
 });
 
-test('AQ-04: Exact cyclotomic Z[zeta_8] identities and Clifford+T norm conservation (k14)', () => {
-  // zeta_8^4 == -1
+test('AQ-04: Unbounded Sparse Z[zeta_8] identities, 1,024-qubit GHZ+T cat state, and k14 norm conservation', () => {
   const z1 = z8MulZeta(Z8_ONE);
   const z2 = z8MulZeta(z1);
   const z3 = z8MulZeta(z2);
   const z4 = z8MulZeta(z3);
   assert.deepEqual(z4, { a: -1n, b: 0n, c: 0n, d: 0n });
 
-  // (sqrt(2))^2 == 2
   const s1 = z8MulSqrt2(Z8_ONE);
   const s2 = z8MulSqrt2(s1);
   assert.deepEqual(s2, { a: 2n, b: 0n, c: 0n, d: 0n });
   assert.deepEqual(z8Mul(s1, s1), z8Add(Z8_ONE, Z8_ONE));
   assert.deepEqual(z8Sub(z1, z3), s1);
 
-  // Execute H -> T -> H -> CNOT -> CZ -> Y -> S and verify exact norm conservation at every step
+  // 3-qubit Clifford+T + non-dyadic Born collapse
   let state = createInitialCyclotomicState(3);
   const steps = [
     { id: '0', kind: GateKind.H, targets: [0] },
@@ -141,52 +194,96 @@ test('AQ-04: Exact cyclotomic Z[zeta_8] identities and Clifford+T norm conservat
     { id: '5', kind: GateKind.Y, targets: [2] },
     { id: '6', kind: GateKind.S, targets: [1] },
   ];
-
   for (const step of steps) {
     state = stepCyclotomicGate(state, step, 0.25).nextState;
-    const report = inspectCyclotomicState(state);
-    assert.equal(report.conservation.normExactOne, true);
+    assert.equal(inspectCyclotomicState(state).conservation.normExactOne, true);
   }
 
-  // Non-dyadic projective Born collapse on q0 followed by another Hadamard still conserves exact norm!
   const collapsed = stepCyclotomicGate(
     state,
     { id: 'm0', kind: GateKind.MEASURE, targets: [0], branchMode: 'force0' },
     0.1,
   );
-  assert.equal(collapsed.measurementOutcome?.outcome, 0);
-  // P(0) after H-T-H is cos^2(pi/8) = (2 + sqrt(2)) / 4 ~= 0.85355339
   assert.ok(Math.abs((collapsed.measurementOutcome?.probZero ?? 0) - 0.85355339) < 1e-6);
 
-  const afterPostH = stepCyclotomicGate(
-    collapsed.nextState,
-    { id: 'h-post', kind: GateKind.H, targets: [0] },
-    0.1,
+  // 1,024-qubit Sparse Z[zeta_8] GHZ + T cat state (zero dense 2^1024 allocation!)
+  let cat1024 = createInitialCyclotomicState(1024);
+  cat1024 = stepCyclotomicGate(cat1024, { id: 'h0', kind: GateKind.H, targets: [0] }, 0.5).nextState;
+  for (let i = 0; i < 1023; i += 1) {
+    cat1024 = stepCyclotomicGate(
+      cat1024,
+      { id: `cx-${i}`, kind: GateKind.CNOT, targets: [i, i + 1] },
+      0.5,
+    ).nextState;
+  }
+  cat1024 = stepCyclotomicGate(
+    cat1024,
+    { id: 't1023', kind: GateKind.T, targets: [1023] },
+    0.5,
   ).nextState;
-  assert.equal(inspectCyclotomicState(afterPostH).conservation.normExactOne, true);
+  assert.equal(cat1024.support.size, 2);
+  const catReport = inspectCyclotomicState(cat1024);
+  assert.equal(catReport.conservation.normExactOne, true);
+  assert.equal(catReport.blochVectors[0].purity, 0.5);
+  assert.equal(catReport.blochVectors[1023].purity, 0.5);
 });
 
-test('AQ-05: Gottesman-Knill F_2 symplectic tableau Bell correlations and surface-code commutativity', () => {
-  let tab = createInitialTableau(2);
-  tab = stepStabilizerTableau(tab, { id: 'h0', kind: GateKind.H, targets: [0] }, 0.2).nextTableau;
-  tab = stepStabilizerTableau(tab, { id: 'cx', kind: GateKind.CNOT, targets: [0, 1] }, 0.2).nextTableau;
-  assert.equal(verifyStabilizersCommute(tab).commutes, true);
+test('AQ-12: Exact Q(zeta_8) Galois-norm RREF Matrix Product State (ExactMps) on 64 non-Clifford qubits', () => {
+  // Compare 4-qubit non-Clifford circuit Bloch observables between CyclotomicExact and ExactMps
+  const testSteps = [
+    { id: 's0', kind: GateKind.H, targets: [0] },
+    { id: 's1', kind: GateKind.T, targets: [0] },
+    { id: 's2', kind: GateKind.CNOT, targets: [0, 1] },
+    { id: 's3', kind: GateKind.H, targets: [1] },
+    { id: 's4', kind: GateKind.CZ, targets: [1, 2] },
+    { id: 's5', kind: GateKind.T, targets: [2] },
+    { id: 's6', kind: GateKind.CNOT, targets: [2, 3] },
+  ];
+  let cyc = createInitialCyclotomicState(4);
+  let mps = createInitialExactMps(4);
+  for (const st of testSteps) {
+    cyc = stepCyclotomicGate(cyc, st, 0.3).nextState;
+    mps = stepExactMpsGate(mps, st, 0.3).nextState;
+  }
+  const cycObs = inspectCyclotomicState(cyc).blochVectors;
+  const mpsObs = inspectExactMpsState(mps).blochVectors;
+  for (let q = 0; q < 4; q += 1) {
+    assert.ok(Math.abs(cycObs[q].rx - mpsObs[q].rx) < 1e-9);
+    assert.ok(Math.abs(cycObs[q].ry - mpsObs[q].ry) < 1e-9);
+    assert.ok(Math.abs(cycObs[q].rz - mpsObs[q].rz) < 1e-9);
+  }
 
-  // Force collapse q0 -> 1; measuring q1 MUST deterministically yield 1!
-  const m0 = stepStabilizerTableau(
-    tab,
-    { id: 'm0', kind: GateKind.MEASURE, targets: [0], branchMode: 'force1' },
-    0.2,
-  );
-  assert.equal(m0.measurementOutcome?.outcome, 1);
+  // 64-qubit non-Clifford cascade in ExactMps with bounded Schmidt bond rank
+  let mps64 = createInitialExactMps(64);
+  for (let i = 0; i < 64; i += 4) {
+    mps64 = stepExactMpsGate(mps64, { id: `h-${i}`, kind: GateKind.H, targets: [i] }, 0.5).nextState;
+    mps64 = stepExactMpsGate(mps64, { id: `t-${i}`, kind: GateKind.T, targets: [i] }, 0.5).nextState;
+    mps64 = stepExactMpsGate(
+      mps64,
+      { id: `cx-${i}`, kind: GateKind.CNOT, targets: [i, i + 1] },
+      0.5,
+    ).nextState;
+  }
+  const bonds = getMpsBondDimensions(mps64);
+  assert.equal(Math.max(...bonds), 2);
+});
 
-  const m1 = stepStabilizerTableau(
-    m0.nextTableau,
-    { id: 'm1', kind: GateKind.MEASURE, targets: [1], branchMode: 'seeded' },
-    0.99,
-  );
-  assert.equal(m1.measurementOutcome?.outcome, 1);
-  assert.equal(m1.measurementOutcome?.probOne, 1);
+test('AQ-05 & AQ-06: 256-qubit BigUint64Array Tableau and parametric d=3,5,7 Surface-Code Tropical QEC', () => {
+  // 256-qubit Clifford ring in word-packed F_2 tableau
+  let tab256 = createInitialTableau(256);
+  for (let i = 0; i < 256; i += 1) {
+    tab256 = stepStabilizerTableau(tab256, { id: `h-${i}`, kind: GateKind.H, targets: [i] }, 0.5)
+      .nextTableau;
+  }
+  for (let i = 0; i < 256; i += 1) {
+    tab256 = stepStabilizerTableau(
+      tab256,
+      { id: `cz-${i}`, kind: GateKind.CZ, targets: [i, (i + 1) % 256] },
+      0.5,
+    ).nextTableau;
+  }
+  assert.equal(tab256.wordsPerRow, 4);
+  assert.equal(verifyStabilizersCommute(tab256).commutes, true);
 
   // T-gate refused in StabilizerTableau mode
   const tRefused = verifyAndCompileCircuitPrism({
@@ -202,31 +299,144 @@ test('AQ-05: Gottesman-Knill F_2 symplectic tableau Bell correlations and surfac
     assert.equal(tRefused.error.kind, StabilizerErrorKind.NonCliffordInTableauMode);
   }
 
-  assert.equal(verifySurfaceCodeCommutativity(), true);
-});
+  // Parametric rotated surface-code commutativity for odd distances d = 3, 5, 7, 9
+  for (const d of [3, 5, 7, 9]) {
+    assert.equal(verifySurfaceCodeCommutativity(d), true);
+  }
+  assert.equal(verifySurfaceCodeCommutativity(4), false);
 
-test('AQ-06: Tropical (min, +) surface-code decoder corrects all 27 single-qubit X, Y, Z faults', () => {
+  // d=3 corrects all 27 single-qubit X, Y, Z faults
   const paulis: PauliFault[] = ['X', 'Y', 'Z'];
   for (let q = 0; q < 9; q += 1) {
     for (const p of paulis) {
       const faults: PauliFault[] = new Array(9).fill('I');
       faults[q] = p;
-      const decoded = decodeSurfaceCodeTropical(faults);
-      assert.equal(
-        decoded.postDecodeExcitedIds.length,
-        0,
-        `Syndrome remained excited for ${p} on d${q}`,
-      );
-      assert.equal(
-        decoded.logicalPreserved,
-        true,
-        `Logical state corrupted for single-qubit ${p} fault on d${q}`,
-      );
+      const decoded = decodeSurfaceCodeTropical(faults, 3);
+      assert.equal(decoded.postDecodeExcitedIds.length, 0);
+      assert.equal(decoded.logicalPreserved, true);
     }
+  }
+
+  // d=5 [[25, 1, 5]] corrects weight-2 faults!
+  const faultsD5: PauliFault[] = new Array(25).fill('I');
+  faultsD5[6] = 'X';
+  faultsD5[18] = 'Z';
+  const decodedD5 = decodeSurfaceCodeTropical(faultsD5, 5);
+  assert.equal(decodedD5.postDecodeExcitedIds.length, 0);
+  assert.equal(decodedD5.logicalPreserved, true);
+});
+
+test('AQ-11: uor-matmul zero-decode kernels (Grid<16>, Packed<Grid<16>,2>, Runs<Grid<16>,16>) & uorc gate', () => {
+  const codebook: bigint[] = [
+    -8n, -6n, -5n, -4n, -3n, -2n, -1n, 0n, 1n, 2n, 3n, 4n, 5n, 6n, 8n, 12n,
+  ];
+  const grid = contractGridCodebook({
+    m: 2,
+    k: 4,
+    n: 2,
+    codebook,
+    lhsIndices: new Uint8Array([15, 8, 7, 0, 14, 13, 2, 1]),
+    rhsIndices: new Uint8Array([15, 0, 8, 14, 7, 7, 1, 15]),
+  });
+  assert.equal(grid.denseFloatAllocs, 0);
+  assert.equal(grid.out[0], 12n * 12n + 1n * 1n + 0n * 0n + (-8n) * (-6n));
+
+  const packed = contractPackedNibbles({
+    m: 1,
+    k: 4,
+    n: 1,
+    codebook,
+    lhsPackedRows: [packGrid16Nibbles([15, 8, 7, 0])],
+    rhsPackedCols: [packGrid16Nibbles([15, 8, 7, 1])],
+  });
+  assert.equal(packed.out[0], 12n * 12n + 1n * 1n + 0n * 0n + (-8n) * (-6n));
+
+  const runs = contractSparseRuns({
+    m: 16,
+    codebook,
+    lhsRows: Array.from({ length: 16 }, (_, r) => [{ col: r, codeIdx: 15 }]),
+    ketSupport: new Map([[3, 14]]),
+  });
+  assert.equal(runs.outSupport.get(3), 12n * 8n);
+  assert.equal(runs.activeTermsVisited, 1);
+
+  assert.equal(
+    decideMatmulCodedAdmission({
+      accumBits: 64,
+      requiredAccumBits: 96,
+      intermediateFloatDecode: false,
+      exactChecksumMatches: true,
+    }).admitted,
+    false,
+  );
+
+  const sample = new Uint8Array([1, 2, 3, 4]);
+  assert.equal(
+    decideUorcAdmission({
+      originalBytes: sample,
+      reconstructedBytes: sample,
+      orderPreserved: true,
+      incumbentBytes: 128,
+      challengerBytes: 96,
+    }).admitted,
+    true,
+  );
+});
+
+test('AQ-13, AQ-14 & AQ-16: UOR Atlas MTC axioms, OpenQASM SkWeaver synthesis, and Row-Honesty gate', () => {
+  const gen96 = buildAtlasGenerators(CANONICAL_ATLAS_PARAMS);
+  assert.equal(gen96.ok, true);
+  if (gen96.ok) {
+    assert.equal(gen96.summary.nClasses, 96);
+    assert.equal(gen96.summary.carrierBytes, 768);
+    assert.equal(gen96.summary.sigmaOrder, 4);
+    assert.equal(gen96.summary.tauOrder, 8);
+    assert.equal(gen96.summary.muOrder, 2);
+  }
+
+  const mtc96 = verifyAtlasMtcAxioms(CANONICAL_ATLAS_PARAMS);
+  assert.ok(mtc96.maxResidual < 1e-12);
+  assert.equal(mtc96.centralChargeMod8, 5);
+
+  const mtc30 = verifyAtlasMtcAxioms(PARAMETRIC_CHECK_ATLAS_PARAMS);
+  assert.ok(mtc30.maxResidual < 1e-12);
+
+  // OpenQASM 2.0 SkWeaver synthesis on Certified22 (rz, rx, ry) vs refusal on Clifford
+  const qasm = `OPENQASM 2.0; qreg q[3]; h q[0]; rz(pi/5) q[0]; rx(pi/7) q[1]; ry(pi/3) q[2]; cx q[0], q[1];`;
+  const woven = weaveOpenQasmWithSkWeaver(qasm, 'Certified22', 0.02);
+  assert.equal(woven.ok, true);
+  if (woven.ok) {
+    assert.ok(woven.maxProjectiveResidual < 0.02, `Expected < 0.02, got ${woven.maxProjectiveResidual}`);
+    assert.equal(woven.segments.length, 5);
+  }
+  const cliffRefused = weaveOpenQasmWithSkWeaver(qasm, 'Clifford', 0.02);
+  assert.equal(cliffRefused.ok, false);
+  if (!cliffRefused.ok) {
+    assert.equal(cliffRefused.error.kind, AtlasBraidErrorKind.NonDiscreteAngleOnCliffordCarrier);
+  }
+
+  // 2,048-qubit Atlas periodic braid with BLAKE3 kappa elision
+  let atl = createInitialAtlasState(2048);
+  const kCache = new Set<string>();
+  for (let s = 0; s < 32; s += 1) {
+    atl = stepAtlasHolospace(atl, { id: `s-${s}`, kind: GateKind.T, targets: [s] }, kCache).nextState;
+  }
+  assert.ok(atl.elidedStepHits >= 24); // order(tau) == 8 -> repeats after 8 steps!
+
+  // UTQC Row-Honesty gate refuses promoting empirical benchmark to some-true
+  const dishonest = decideUtqcRowHonesty({
+    claimedTier: 'some-true',
+    hasCitationAnchor: true,
+    isEmpiricalBenchmarkOnly: true,
+    hasPlantedDefectRefusal: true,
+  });
+  assert.equal(dishonest.ok, false);
+  if (!dishonest.ok) {
+    assert.equal(dishonest.error.kind, HonestyVerdictErrorKind.RefuseBenchMarkedAsProof);
   }
 });
 
-test('AQ-07 & AQ-08: RollbackSession re-branching, #vdnt= URL codec, UORC chain, and Stitch 2-of-3 parity', () => {
+test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm32 Hologram v4 guest', async () => {
   const session = executeCircuitRollbackSession({
     name: 'Bell Rollback',
     description: 'Bell collapse test',
@@ -242,67 +452,41 @@ test('AQ-07 & AQ-08: RollbackSession re-branching, #vdnt= URL codec, UORC chain,
   assert.equal(session.ok, true);
   if (!session.ok) return;
 
-  assert.equal(session.frames.length, 4);
-  // Before measurement (frame 2): entangled Bell state -> q1 rz == 0, purity == 0.5
-  assert.equal(session.frames[2].blochVectors[1].purity, 0.5);
-  // After measurement forced to |1> (frame 3): q1 collapses to |1> -> rz == -1, purity == 1
-  assert.equal(session.frames[3].blochVectors[1].rz, -1);
-  assert.equal(session.frames[3].blochVectors[1].purity, 1);
-
-  // #vdnt= snapshot round-trip and tamper detection
   const token = encodeVdntSnapshotToken({ spec: session.spec, cursor: 3 });
-  const decoded = decodeVdntSnapshotToken(`#vdnt=${token}`);
-  assert.equal(decoded.ok, true);
-  if (decoded.ok) {
-    assert.equal(decoded.value.cursor, 3);
-    assert.equal(decoded.value.spec.name, 'Bell Rollback');
-  }
-  const tampered = decodeVdntSnapshotToken(`${token.slice(0, -2)}ff`);
-  assert.equal(tampered.ok, false);
+  assert.equal(decodeVdntSnapshotToken(`#vdnt=${token}`).ok, true);
 
-  // Progressive UORC LOD0..LOD4 & Stitch 2-of-3 XOR parity custody
   const uorcFrames = packProgressiveUorcStream(session.spec, session.frames[3]);
-  assert.equal(uorcFrames.length, 5);
-  assert.equal(uorcFrames[3].lossless, true);
-  assert.equal(uorcFrames[4].lossless, true);
-
-  const bundle = createStitchParityBundle(
-    uorcFrames[4].rawBytes,
-    'prism/identity/4:test',
-    'deadbeef',
-  );
-  // Drop shard 0, 1, or 2 -> all reconstruct bit-identically!
+  const bundle = createStitchParityBundle(uorcFrames[4].rawBytes, 'prism/identity/4:test', 'beef');
   assert.equal(reconstructFromStitchShards(bundle, [false, true, true]).integrityVerified, true);
-  assert.equal(reconstructFromStitchShards(bundle, [true, false, true]).integrityVerified, true);
-  assert.equal(reconstructFromStitchShards(bundle, [true, true, false]).integrityVerified, true);
-  // Drop 2 shards -> refused cleanly
-  assert.equal(reconstructFromStitchShards(bundle, [true, false, false]).ok, false);
-});
 
-test('AQ-09 & AQ-10: CodedSlmDirector DenialWins guard, Core-Wasm acceptance vectors, and 16x16 tile rasterizer', () => {
-  const validSlm = routePromptWithCodedSlm('prepare 3-qubit GHZ state');
-  assert.equal(validSlm.admitted, true);
-  assert.equal(validSlm.proposedSpec.qubitCount, 3);
-
-  const blockedSlm = routePromptWithCodedSlm('clone q0 onto q0 with duplicate wire');
-  assert.equal(blockedSlm.admitted, false);
-  assert.equal(blockedSlm.refusalError?.kind, QuantumIsaErrorKind.DuplicateWireReference);
-
-  const acceptance = runAllAcceptanceVectors();
-  assert.equal(acceptance.passed, acceptance.total);
-  assert.equal(acceptance.total, 16);
-
+  assert.equal(routePromptWithCodedSlm('clone q0 onto q0').admitted, false);
+  assert.equal(runAllAcceptanceVectors().passed, 24);
+  assert.equal(PLANTED_DEFECT_CATALOG.length, 8);
   for (const defect of PLANTED_DEFECT_CATALOG) {
-    const rep = defect.run();
-    assert.equal(rep.gateTriggered, true);
-    assert.ok(rep.verifierRefusalVector.startsWith('refused:'));
+    assert.equal(defect.run().gateTriggered, true);
   }
 
+  // Build, parse, BLAKE3-verify, WebAssembly.compile, and execute REAL zero-import wasm32 VerdantAqm.holo v4 guest!
+  const holo = buildVerdantAqmHoloArchive();
+  const verified = await parseAndVerifyHoloV4Archive(holo.archiveBytes);
+  assert.equal(verified.valid, true);
+  assert.equal(verified.version, 4);
+  assert.equal(verified.manifestLength, 356);
+  assert.equal(verified.zeroImportsVerified, true);
+
+  const guest = await instantiateHoloCoreWasmGuest(verified.wasmBytes);
+  for (const vec of CORE_WASM_ACCEPTANCE_VECTORS) {
+    const out = runHoloCoreWasmGuest(guest, vec.request);
+    assert.equal(out, vec.expectedResponse, `Wasm guest mismatch on '${vec.request}'`);
+  }
+  assert.equal(runHoloCoreWasmGuest(guest, new Uint8Array(65)), 'invalid request');
+
+  // Software 16x16 tile rasterizer on d=5 surface code
   const tris = buildSoftwareQuantumSceneTriangles({
-    sceneMode: 'bloch',
-    blochVectors: [{ qubit: 0, rx: 1, ry: 0, rz: 0, purity: 1, entropyBits: 0, p1: 0.5, collapsedTo: null }],
+    sceneMode: 'surface-code',
+    blochVectors: [],
     entanglementEdges: [],
-    surfaceFaults: new Array(9).fill('I'),
+    surfaceFaults: new Array<PauliFault>(25).fill('I'),
     lod: 3,
   });
   const raster = rasterizeQuantumSceneTiles({

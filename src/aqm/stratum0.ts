@@ -1,6 +1,7 @@
 /**
  * Stratum 0 — Pure {0, 1} Constructive Arithmetic, BoundedBuffer & W5H Certificates
  * Derived strictly from {0, 1} with zero magic numeric literals (FI-08 parametric ratchet).
+ * Note: Zero artificial classical qubit ceilings are imposed in Stratum 0.
  */
 
 export const ZERO = 0;
@@ -17,6 +18,7 @@ export const TEN = TWO * FIVE;
 export const TWELVE = THREE * FOUR;
 export const FIFTEEN = THREE * FIVE;
 export const SIXTEEN = FOUR * FOUR;
+export const TWENTY_FOUR = THREE * EIGHT;
 
 export const ZERO_BIG = BigInt(ZERO);
 export const ONE_BIG = BigInt(ONE);
@@ -37,7 +39,7 @@ export function pow2Constructive(exp: number): number {
 }
 
 /**
- * Constructive BigInt power of two: 2n^exp for arbitrary bit-width accumulators (64/96/128-bit+).
+ * Constructive BigInt power of two: 2n^exp for arbitrary bit-width accumulators and ket indices.
  */
 export function pow2BigInt(exp: number): bigint {
   let acc = ONE_BIG;
@@ -53,6 +55,8 @@ export const NINETY_SIX = THREE * THIRTY_TWO;
 export const ONE_TWENTY_EIGHT = pow2Constructive(SEVEN);
 export const TWO_FIFTY_SIX = pow2Constructive(EIGHT);
 export const FIVE_TWELVE = pow2Constructive(NINE);
+export const ONE_THOUSAND_TWENTY_FOUR = pow2Constructive(TEN);
+export const FOUR_THOUSAND_NINETY_SIX = pow2Constructive(TWELVE);
 
 /** Canonical Stratum 0 & Engine structural constants derived from {0, 1} */
 export const CORE_WASM_REQUEST_MAX_BYTES = SIXTY_FOUR;
@@ -64,7 +68,6 @@ export const PACKED_NIBBLE_BITS = FOUR;
 export const PACKED_NIBBLE_PER_BYTE = TWO;
 export const AUDIO_WORKLET_QUANTUM_FRAMES = ONE_TWENTY_EIGHT;
 export const SNAPSHOT_URL_MAX_BYTES = pow2Constructive(FIFTEEN);
-export const MAX_EXACT_STATEVEC_QUBITS = EIGHT; // Up to 2^8 = 256 exact cyclotomic basis states in interactive UI
 export const DEFAULT_QUBIT_COUNT = FOUR;
 
 /**
@@ -156,34 +159,34 @@ export const AQM_STRATA_CERTIFICATES: readonly W5HStratumCertificate[] = [
   {
     stratum: ZERO,
     who: 'Foundation.Ontology & Bytes',
-    what: 'Constructive {0,1} powers, primes, and BoundedBuffer',
-    whereModule: 'src/aqm/stratum0.ts',
+    what: 'Constructive {0,1} powers, primes, BLAKE3 kappa, and BoundedBuffer',
+    whereModule: 'src/aqm/stratum0.ts · blake3.ts',
     whenPhase: 'Compile & ingress guard',
     whyInvariant: 'Zero magic literals (FI-08) and bounded input memory',
-    howConstructed: 'pow2Constructive, nthPrimeConstructive, BoundedBuffer(64/512)',
+    howConstructed: 'pow2Constructive, nthPrimeConstructive, blake3Kappa, BoundedBuffer(64/512)',
   },
   {
     stratum: ONE,
-    who: 'Semiring Tensor Substrate',
-    what: 'Exact Z[zeta_8]/2^k state vectors, F_2 tableaus, Tropical lightcones',
-    whereModule: 'src/aqm/cyclotomic.ts · stabilizer.ts · tropical.ts',
-    whenPhase: 'Gate contraction & syndrome solve',
-    whyInvariant: 'Zero floating-point drift, exact l2 norm conservation (k14)',
-    howConstructed: '128-bit BigInt cyclotomic ring + F_2 symplectic inner product',
+    who: 'Unbounded Semiring & Topological Substrate',
+    what: 'Sparse BigInt Z[zeta_8] kets, ExactMps Z[zeta_8], 64-bit F_2 tableau, Atlas MTC, uor-matmul',
+    whereModule: 'src/aqm/cyclotomic.ts · mps.ts · stabilizer.ts · atlasUtqc.ts · codedMatmul.ts',
+    whenPhase: 'Gate contraction, braid weaving & syndrome solve',
+    whyInvariant: 'Zero 2^n dense RAM ceiling, zero float drift, exact k14 norm & MTC axioms',
+    howConstructed: 'Sparse BigInt kets + Exact Z[zeta_8] MPS + BigUint64Array F_2 + C(Z_3 x Z_2^3, q)',
   },
   {
     stratum: TWO,
-    who: 'Circuit DAG Compiler',
-    what: 'Kahn topological layer scheduler & wire linearity',
-    whereModule: 'src/aqm/prismKernel.ts',
-    whenPhase: 'Pre-execution validation',
-    whyInvariant: 'No-cloning (distinct wires) and acyclic causal ordering',
-    howConstructed: 'wiresDistinctAndBounded + Kahn barrier scheduler',
+    who: 'Unbounded Circuit DAG & QASM Compiler',
+    what: 'Kahn topological layer scheduler, wire linearity & SkWeaver PU(22) braids',
+    whereModule: 'src/aqm/prismKernel.ts · atlasUtqc.ts',
+    whenPhase: 'Pre-execution validation & synthesis',
+    whyInvariant: 'No-cloning (distinct wires), acyclic causal ordering, SU(2) residual bound',
+    howConstructed: 'wiresDistinctAndBounded + Kahn barrier scheduler + ZXZ Euler synthesis',
   },
   {
     stratum: THREE,
     who: 'Deterministic Rollback Engine',
-    what: 'SHA-256 DeterministicInputJournal & 64-frame RollbackSession',
+    what: 'SHA-256 DeterministicInputJournal & RollbackSession across all 4 backends',
     whereModule: 'src/aqm/journal.ts',
     whenPhase: 'Born-rule collapse & branch replay',
     whyInvariant: 'Bit-exact cross-architecture replay and measurement re-branching',
@@ -192,25 +195,25 @@ export const AQM_STRATA_CERTIFICATES: readonly W5HStratumCertificate[] = [
   {
     stratum: FOUR,
     who: 'Progressive Streaming & Custody',
-    what: 'UORC-SHA256-CHAIN-v1 LOD0..LOD4 & Stitch 2-of-3 XOR parity',
-    whereModule: 'src/aqm/journal.ts',
+    what: 'UORC-SHA256-CHAIN-v1 LOD0..LOD4, OrderRope challenger gate & Stitch 2-of-3 XOR',
+    whereModule: 'src/aqm/journal.ts · codedMatmul.ts',
     whenPhase: 'Progressive load & peer custody',
-    whyInvariant: 'Single-shard fault tolerance and authenticated LOD refinement',
-    howConstructed: '5-tier UORC frame chain + GF(2) parity shards + WebCrypto ECDSA',
+    whyInvariant: 'Lossless challenger admission and single-shard fault tolerance',
+    howConstructed: '5-tier UORC frame chain + OrderRope gate + GF(2) parity + WebCrypto ECDSA',
   },
   {
     stratum: FIVE,
-    who: 'Core-Wasm Isolated Verifier',
-    what: 'hologram:guest/core-wasm@1 worker acceptance & defect gates',
-    whereModule: 'src/aqm/verifierWorker.ts',
-    whenPhase: 'Off-thread verification',
-    whyInvariant: 'Untrusted UI separation and planted-defect refusal (R5)',
-    howConstructed: 'Web Worker message boundary + 16 acceptance vectors',
+    who: 'Hologram v4 & Core-Wasm Guest Verifier',
+    what: 'VerdantAqm.holo v4 archive + real zero-import wasm32 Web Worker guest',
+    whereModule: 'src/aqm/holoGuest.ts · verifierWorker.ts',
+    whenPhase: 'Off-thread Wasm verification',
+    whyInvariant: 'Zero host imports, BLAKE3 footer integrity, 24 vectors & 10 defect gates (R5)',
+    howConstructed: 'WebAssembly.compile + memory/holo_alloc/holo_run ABI + BLAKE3 APP_MANIFEST',
   },
   {
     stratum: SIX,
     who: 'Spatial 3D Quantum Studio',
-    what: 'Bloch manifolds, d=3 rotated surface-code QEC, causal lightcones',
+    what: 'Bloch manifolds, parametric [[d^2, 1, d]] surface-code QEC, causal lightcones',
     whereModule: 'src/components/QuantumViewport3D.tsx · tileRasterizer.ts',
     whenPhase: 'On-demand viewport render',
     whyInvariant: 'Identical scene semantics across WebGL2 PBR and 16x16 software tiles',
@@ -218,12 +221,12 @@ export const AQM_STRATA_CERTIFICATES: readonly W5HStratumCertificate[] = [
   },
   {
     stratum: SEVEN,
-    who: 'Cybernetics, SLM & Acoustics',
-    what: 'Q15 LIF observer, 4-bit CodedSlmDirector, Euler-Bernoulli modal bars',
-    whereModule: 'src/aqm/slm.ts · sonification.ts',
-    whenPhase: 'Operator guidance & telemetry sonification',
-    whyInvariant: 'DenialWins invariant-guarded proposals and 128-frame audio quantum',
-    howConstructed: 'Packed 4-bit nibble GEMM + WebAudio modal harmonic bank',
+    who: 'Cybernetics, SLM, Acoustics & Honesty',
+    what: 'Q15 LIF observer, 4-bit CodedSlmDirector, Euler-Bernoulli audio, UTQC Row-Honesty',
+    whereModule: 'src/aqm/slm.ts · sonification.ts · atlasUtqc.ts',
+    whenPhase: 'Operator guidance, sonification & ledger audit',
+    whyInvariant: 'DenialWins proposals, 128-frame audio quantum, zero benchmark status inflation',
+    howConstructed: 'Packed 4-bit nibble GEMM + WebAudio modal bank + Honesty.lex.tex gate',
   },
 ];
 
@@ -242,6 +245,7 @@ export function verifyConstructiveRatchet(): {
     pow2Constructive(SIX) === ROLLBACK_WINDOW_FRAMES,
     pow2Constructive(SEVEN) === ONE_TWENTY_EIGHT,
     pow2Constructive(NINE) === CORE_WASM_RESPONSE_MAX_BYTES,
+    pow2Constructive(TEN) === ONE_THOUSAND_TWENTY_FOUR,
     nthPrimeConstructive(ZERO) === TWO,
     nthPrimeConstructive(ONE) === THREE,
     nthPrimeConstructive(TWO) === FIVE,
