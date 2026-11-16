@@ -13,6 +13,11 @@ import gherkinSuiteSource from '@/features/suites/aqm.feature?raw';
 import advantageFeatureSource from '@/features/targets/advantage.feature?raw';
 import modelIdsSource from '@/model/ids.toml?raw';
 import modelLedgerSource from '@/model/ledger.toml?raw';
+import pagesWorkflowSource from '@/.github/workflows/pages.yml?raw';
+import siteAppJsonSource from '@/site/app.json?raw';
+import kappaCacheSource from '@/ci/kappa-cache.ts?raw';
+import precacheScriptSource from '@/bootstrap/precache.ts?raw';
+import serviceWorkerSource from '@/public/sw.js?raw';
 import {
   buildVerdantAqmHoloArchive,
   runWasmPacked4Gemv,
@@ -38,7 +43,7 @@ interface PrismVerifierPanelProps {
   onSelectLod: (lod: number) => void;
 }
 
-type PrismSubView = 'holo-wasm' | 'facets' | 'custody';
+type PrismSubView = 'holo-wasm' | 'facets' | 'custody' | 'pages';
 
 const ARTIFACT_FILES: ReadonlyArray<{
   readonly key: string;
@@ -87,6 +92,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
     result: PlantedDefectResult;
   } | null>(null);
   const [artifactKey, setArtifactKey] = useState<string>('quantum');
+  const [pagesDocKey, setPagesDocKey] = useState<'workflow' | 'appjson' | 'kappa' | 'sw' | 'precache'>('workflow');
   const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -242,6 +248,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               ['holo-wasm', 'Holo v4 & Core-Wasm Guest'],
               ['facets', 'All 8 Prism Facets & Model'],
               ['custody', 'UORC & Stitch Custody'],
+              ['pages', 'GitHub Pages & Provenance'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -291,6 +298,114 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
           activeLod={activeLod}
           onSelectLod={onSelectLod}
         />
+      ) : subView === 'pages' ? (
+        (() => {
+          const parsedApp = JSON.parse(siteAppJsonSource) as {
+            name: string;
+            live: string;
+            repository: string;
+            claim: string;
+            theorems: ReadonlyArray<{ name: string; statement: string; where: string }>;
+          };
+          const pagesDocs = {
+            workflow: { label: '.github/workflows/pages.yml', content: pagesWorkflowSource },
+            appjson: { label: 'site/app.json', content: siteAppJsonSource },
+            kappa: { label: 'ci/kappa-cache.ts', content: kappaCacheSource },
+            sw: { label: 'public/sw.js', content: serviceWorkerSource },
+            precache: { label: 'bootstrap/precache.ts', content: precacheScriptSource },
+          } as const;
+          return (
+            <div className="max-w-[1380px] mx-auto px-6 py-4 space-y-6">
+              <div className="p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                      GitHub Pages Publishing, Input-κ Cache & SLSA Provenance (pages.yml)
+                    </h1>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Modeled after afflom/verdant-engine: builds subpath-safe static site + verified VerdantAqm.holo v4 guest, signs SLSA provenance, and writes content-addressed precache.json.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const blob = new Blob([siteAppJsonSource], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'app.json';
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+                      setDownloadStatus('Exported site/app.json Prism Pages manifest');
+                    }}
+                    className="h-9 px-3.5 rounded-lg text-xs font-semibold border border-emerald-600 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white transition-colors whitespace-nowrap shrink-0"
+                  >
+                    Export site/app.json
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <div className="text-slate-500">Target Pages URL</div>
+                    <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                      {parsedApp.live}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <div className="text-slate-500">Input-Addressed Cache</div>
+                    <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      ghcr.io/*/prism-holo (BLAKE3 κ)
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <div className="text-slate-500">Provenance Attestation</div>
+                    <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      attest-build-provenance@v4.2.2
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <div className="text-slate-500">Offline SW Cache</div>
+                    <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      prism-&lt;sha256&gt; + precache.json
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                    Published Claim ({parsedApp.theorems.length} Pinned Theorems in site/app.json)
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-300 font-mono leading-relaxed">
+                    {parsedApp.claim}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {(Object.keys(pagesDocs) as Array<keyof typeof pagesDocs>).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setPagesDocKey(k)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
+                        pagesDocKey === k
+                          ? 'bg-emerald-600 border-emerald-500 text-white'
+                          : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-emerald-500'
+                      }`}
+                    >
+                      {pagesDocs[k].label}
+                    </button>
+                  ))}
+                </div>
+
+                <pre className="p-4 rounded-lg bg-slate-950 text-slate-200 font-mono text-xs leading-relaxed overflow-auto max-h-[520px] border border-slate-800">
+                  {pagesDocs[pagesDocKey].content}
+                </pre>
+              </div>
+            </div>
+          );
+        })()
       ) : subView === 'facets' ? (
         <div className="max-w-[1380px] mx-auto px-6 py-4 space-y-6">
           <div className="p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">

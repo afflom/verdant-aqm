@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+/**
+ * Pre-Deploy GitHub Pages Integrity, Wasm Replay & FR-03 Wire-Weight Gate (`bootstrap/weight-gate.ts`)
+ *
+ * Modeled after `afflom/verdant-engine/bootstrap/weight.mjs`:
+ *  1. Verifies all required GitHub Pages artifacts exist in `dist/`:
+ *     `index.html`, `404.html`, `.nojekyll`, `sw.js`, `manifest.webmanifest`, `app.json`, `app.holo`, `precache.json`, `llms.txt`.
+ *  2. Verifies `dist/index.html` uses subpath-safe relative `./assets/...` references so project
+ *     sites (`https://<owner>.github.io/<repo>/`) load without 404s.
+ *  3. Re-verifies `dist/app.holo` (`VerdantAqm.holo` v4) from disk: 32-byte BLAKE3 footer,
+ *     zero-import `wasm32` sandbox, 6 exports, and all 26 `holo_run` acceptance vectors.
+ *  4. Verifies every file listed in `dist/precache.json` matches its recorded SHA-256 digest.
+ *  5. Computes gzipped wire-transfer sizes (matching GitHub Pages gzip encoding) and enforces
+ *     explicit `holo` and `app` wire budgets before `actions/upload-pages-artifact` runs.
+ */
+
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
+
+import { verifyHoloArchiveComplete } from '../ci/kappa-cache';
+import { PrecacheManifest } from './precache';
+
+export const PAGES_WIRE_BUDGET = {
+  holoGzipMaxBytes: 16 * 1024, // VerdantAqm.holo v4 guest (< 4.5 KiB raw, < 2.5 KiB gzip)
+  shellHtmlGzipMaxBytes: 16 * 1024,
+  totalGzipMaxBytes: 450 * 1024, // Full React + Three.js + 4-substrate AQM + Wasm studio gzipped
+} as const;
+
+export interface PagesWeightGateReport {
+  readonly valid: boolean;
+  readonly precacheVersion: string;
+  readonly verifiedFiles: number;
+  readonly holoRawBytes: number;
+  readonly holoGzipBytes: number;
+  readonly totalRawBytes: number;
+  readonly totalGzipBytes: number;
+  readonly vectorsPassed: number;
+}
+
+const REQUIRED_ARTIFACTS = [
+  'index.html',
+  '404.html',
+  '.nojekyll',
+  'sw.js',
+  'favicon.svg',
+  'manifest.webmanifest',
+  'app.json',
+  'app.holo',
+  'VerdantAqm.holo',
+  'precache.json',
+  'llms.txt',
+] as const;
+
+export async function verifyAssembledPagesSite(
+  siteArg = 'dist',
+  cwd = process.cwd(),
+): Promise<PagesWeightGateReport> {
+  const siteDir = resolve(cwd, siteArg);
+  const failures: string[] = [];
+
+  for (const reqFile of REQUIRED_ARTIFACTS) {
+    if (!existsSync(join(siteDir, reqFile))) {
+      failures.push(`missing required GitHub Pages artifact: ${reqFile}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Pages artifact check failed:\n  - ${failures.join('\n  - ')}`);
+  }
+
+  // Verify index.html uses subpath-safe references (no root-anchored `/assets/` script/style tags)
+  const indexHtml = readFileSync(join(siteDir, 'index.html'), 'utf8');
+  if (/(?:src|href)="\/assets\//.test(indexHtml)) {
+    failures.push(
+      'dist/index.html contains root-absolute /assets/ URLs that break GitHub Pages repository subpaths; set base="./" or VITE_BASE_PATH',
+    );
+  }
+
+  // Replay full zero-import wasm32 verification on the emitted dist/app.holo
+  const holoBytes = new Uint8Array(readFileSync(join(siteDir, 'app.holo')));
+  const holoReport = await verifyHoloArchiveComplete(holoBytes);
+  const holoGzipBytes = gzipSync(holoBytes).byteLength;
+
+  // Verify app.json schema & provenance fields
+  const appJson = JSON.parse(readFileSync(join(siteDir, 'app.json'), 'utf8')) as {
+    name?: string;
+    live?: string;
+    repository?: string;
+    theorems?: unknown[];
+    attestations?: { build?: { id?: string; url?: string } };
+  };
+  if (!appJson.name || !appJson.live || !appJson.repository || !Array.isArray(appJson.theorems)) {
+    failures.push('dist/app.json is missing required Prism manifest fields (name, live, repository, theorems)');
+  }
+  if (!appJson.attestations?.build?.id || !appJson.attestations?.build?.url) {
+    failures.push('dist/app.json is missing attestations.build provenance metadata');
+  }
+
+  // Verify precache.json SHA-256 integrity and measure gzipped wire transfer
+  const precache = JSON.parse(
+    readFileSync(join(siteDir, 'precache.json'), 'utf8'),
+  ) as PrecacheManifest;
+  if (!precache.version || precache.version.length !== 16 || precache.files.length === 0) {
+    failures.push('dist/precache.json has invalid version or empty file list');
+  }
+
+  let totalRawBytes = 0;
+  let totalGzipBytes = 0;
+  let shellHtmlGzipBytes = 0;
+
+  for (const entry of precache.files) {
+    const cleanRel = entry.path.replace(/^\.\//, '');
+    const fullPath = join(siteDir, cleanRel);
+    if (!existsSync(fullPath)) {
+      failures.push(`precache entry missing on disk: ${entry.path}`);
+      continue;
+    }
+    const diskBytes = readFileSync(fullPath);
+    const actualSha = createHash('sha256').update(diskBytes).digest('hex');
+    if (actualSha !== entry.sha256) {
+      failures.push(`SHA-256 mismatch for ${entry.path}: expected ${entry.sha256}, got ${actualSha}`);
+    }
+    const gz = gzipSync(diskBytes).byteLength;
+    totalRawBytes += diskBytes.byteLength;
+    totalGzipBytes += gz;
+    if (cleanRel === 'index.html') {
+      shellHtmlGzipBytes = gz;
+    }
+  }
+
+  if (holoGzipBytes > PAGES_WIRE_BUDGET.holoGzipMaxBytes) {
+    failures.push(
+      `app.holo gzipped wire size ${holoGzipBytes} B exceeds budget ${PAGES_WIRE_BUDGET.holoGzipMaxBytes} B`,
+    );
+  }
+  if (shellHtmlGzipBytes > PAGES_WIRE_BUDGET.shellHtmlGzipMaxBytes) {
+    failures.push(
+      `index.html gzipped wire size ${shellHtmlGzipBytes} B exceeds budget ${PAGES_WIRE_BUDGET.shellHtmlGzipMaxBytes} B`,
+    );
+  }
+  if (totalGzipBytes > PAGES_WIRE_BUDGET.totalGzipMaxBytes) {
+    failures.push(
+      `total gzipped wire size ${totalGzipBytes} B exceeds budget ${PAGES_WIRE_BUDGET.totalGzipMaxBytes} B`,
+    );
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Pages weight/integrity gate refused deployment:\n  - ${failures.join('\n  - ')}`);
+  }
+
+  console.log(
+    `weight-gate: PASS · precache v=${precache.version} (${precache.files.length} files) · app.holo=${holoReport.byteLength}B (${holoGzipBytes}B gz, 26/26 Wasm vectors) · total=${(totalRawBytes / 1024).toFixed(1)} KiB raw / ${(totalGzipBytes / 1024).toFixed(1)} KiB gzip`,
+  );
+
+  return {
+    valid: true,
+    precacheVersion: precache.version,
+    verifiedFiles: precache.files.length,
+    holoRawBytes: holoReport.byteLength,
+    holoGzipBytes,
+    totalRawBytes,
+    totalGzipBytes,
+    vectorsPassed: 26,
+  };
+}
+
+const isMain =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+
+if (isMain) {
+  verifyAssembledPagesSite(process.argv[2] ?? 'dist').catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -1,0 +1,103 @@
+{
+  "name": "Verdant AQM",
+  "shortName": "VerdantAQM",
+  "live": "https://afflom.github.io/verdant-aqm/",
+  "purpose": "Prism-verified Abstract Quantum Machine mechanized across 8 constructive strata, executing sparse Z[ζ₈] cyclotomic registers, exact Q(ζ₈) Galois-RREF MPS, column bit-plane F₂ stabilizer tableaus, Wasm-accelerated tropical (min, +) QEC decoding, and UOR Atlas topological braids.",
+  "inputLabel": "AQM Core-Wasm verification query",
+  "placeholder": "aqm:summary or aqm:fusion or aqm:wasm:kernels",
+  "submitLabel": "Verify",
+  "outputLabel": "AQM verdict",
+  "answers": {
+    "positive": [
+      "conformant:*"
+    ],
+    "negative": [
+      "refused:*"
+    ],
+    "refusal": "invalid request"
+  },
+  "promise": {
+    "headline": "Zero-magic-constant quantum execution, algebraic gate-fusion, surface-code QEC, and topological braid synthesis in every browser.",
+    "detail": "Every quantum gate reduces to exact uor-matmul semiring contractions over sparse Z[ζ₈] kets, Q(ζ₈) Galois-norm RREF tensor trains, 32-row column bit-plane F₂ tableaus, zero-import wasm32 compute kernels, and 2-of-3 Stitch parity custody."
+  },
+  "claim": "AQ-15 & AQ-18: the zero-import wasm32 VerdantAqm.holo v4 guest answers conformant across all 26 pinned capability and planted-defect vectors, executes native i64.popcnt symplectic, Packed<Grid<16>,2> GEMV, and k7 Tropical (min, +) kernels in linear Wasm memory, and answers invalid request for unknown or >64-byte queries.",
+  "proposition": {
+    "name": "QuantumMachineLawfulAndConserved",
+    "text": "CircuitLinearAndAcyclic spec :=\n  DistinctGateWires spec.steps = true\n  /\\ KahnTopologicalAcyclic spec.steps = true\n\nPhaseOctantFusionIdentity a b :=\n  phaseOctantFusionMod8 a b = (a + b) % 8\n  /\\ phaseOctantFusionMod8 a (8 - (a % 8)) = 0\n\nConservationLedgerValid state :=\n  exactNormSquared Z[sqrt 2] state.support = state.normDenom",
+    "plain": "Every admitted quantum circuit satisfies wire-linearity (no-cloning) and Kahn DAG acyclicity, diagonal Z₈ phase gates fuse losslessly modulo 8 with exact involution cancellation, and sparse cyclotomic probability mass equals 1 identically without floating-point drift."
+  },
+  "theorems": [
+    {
+      "name": "inv001WireLinearityNoCloning",
+      "statement": "distinctWirePair q q = false",
+      "how": "Proved by constructive kernel decision refusing duplicate control/target wire indices on two-qubit gates",
+      "where": "app/src/Quantum.lex.tex"
+    },
+    {
+      "name": "inv004CyclotomicNormConserved",
+      "statement": "zSqrt2NormValid normP normQ scaleDenom = true",
+      "how": "Proved by exact algebraic k14 ConservationLedger identity over Z[ζ₈] and Z[√2]",
+      "where": "app/src/Quantum.lex.tex"
+    },
+    {
+      "name": "inv011PhaseOctantFusionIdentity",
+      "statement": "phaseOctantFusionMod8 a (8 - (a % 8)) = 0",
+      "how": "Proved by constructive kernel evaluation over Z₈ phase-octant monoid fusion and involution cancellation",
+      "where": "app/src/Quantum.lex.tex"
+    },
+    {
+      "name": "utqcRowHonestyEnforced",
+      "statement": "decideUtqcRowHonesty benchClaimedAsProof = refuseBenchMarkedAsProof",
+      "how": "Proved by constructive kernel evaluation separating peer-reviewed some-true theorems, build conformance gates, and open empirical benchmarks",
+      "where": "app/src/Honesty.lex.tex"
+    },
+    {
+      "name": "coreWasmSandboxZeroImports",
+      "statement": "pinnedAcceptanceVectorCount = 26 /\\ pinnedWasmExportCount = 6",
+      "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 26/26 holo_run vector replay",
+      "where": "app/src/Quality.lex.tex"
+    }
+  ],
+  "pinned": [
+    {
+      "name": "aqm_core_wasm_26_vectors",
+      "what": "Verifies the compiled zero-import wasm32 VerdantAqm.holo v4 archive, 356-byte APP_MANIFEST, 32-byte BLAKE3 footer, 6 Wasm exports, and all 26 positive/defect holo_run vectors.",
+      "where": "src/aqm/aqm.test.ts"
+    },
+    {
+      "name": "zero_constants_constructive_ratchet_aq_01",
+      "what": "Derives powers of two, primes, 64-byte BoundedBuffer request limits, 16x16 tile dimensions, and continued-fraction convergents constructively from {0, 1}.",
+      "where": "src/aqm/stratum0.ts"
+    }
+  ],
+  "trusted": [
+    {
+      "name": "Prism 8-facet specification",
+      "value": "app/src/{Quantum,Architecture,Design,Features,Security,Quality,Compliance,Honesty}.lex.tex"
+    },
+    {
+      "name": "Hologram v4 guest contract",
+      "value": "hologram:guest/core-wasm@1 (0 imports, 6 exports, BLAKE3-pinned)"
+    },
+    {
+      "name": "Rust execution crate",
+      "value": "crates/verdant-aqm (#![forbid(unsafe_code)])"
+    },
+    {
+      "name": "Your browser",
+      "value": "runs WebGL2/16x16-tile 3D Bloch & surface-code manifolds, WebAudio, and the isolated Core-Wasm worker"
+    }
+  ],
+  "attestations": {
+    "proof": {
+      "id": "verified across AQ-01..AQ-18 and 9 planted-defect refusal gates",
+      "url": "https://github.com/afflom/verdant-aqm/blob/main/CONFORMANCE.md"
+    },
+    "build": {
+      "id": "signed via actions/attest-build-provenance in every pages.yml deployment run",
+      "url": "https://github.com/afflom/verdant-aqm/actions/workflows/pages.yml"
+    }
+  },
+  "repository": "https://github.com/afflom/verdant-aqm",
+  "report": "https://github.com/afflom/verdant-aqm/blob/main/CONFORMANCE.md"
+}

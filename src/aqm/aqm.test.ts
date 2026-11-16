@@ -4,7 +4,15 @@
  */
 
 import assert from 'node:assert/strict';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+
+import { assemblePagesSite } from '../../bootstrap/assemble-pages';
+import { buildPrecacheManifest } from '../../bootstrap/precache';
+import { verifyAssembledPagesSite } from '../../bootstrap/weight-gate';
+import { computeInputKappa } from '../../ci/kappa-cache';
 
 import {
   CANONICAL_ATLAS_PARAMS,
@@ -639,4 +647,48 @@ test('AQ-17 & AQ-18: Prism Monoid Gate-Fusion, Zero-Import wasm32 Compute Kernel
     );
   }
 });
+
+test('GitHub Pages publishing pipeline: pages.yml, site/app.json, input-kappa cache, precache.json & weight-gate', async () => {
+  // 1. Deterministic prism/input-kappa/1 BLAKE3 digest across app, model, crates, src/aqm
+  const k1 = computeInputKappa(['app', 'model', 'crates', 'src/aqm']);
+  const k2 = computeInputKappa(['app', 'model', 'crates', 'src/aqm']);
+  assert.equal(k1.kappa, k2.kappa);
+  assert.ok(k1.kappa.startsWith('blake3:'));
+  assert.equal(k1.kappa.length, 71);
+  assert.ok(k1.files >= 20);
+
+  // 2. Verify .github/workflows/pages.yml pins commit SHAs & SLSA attestation + deploy-pages
+  const pagesYml = readFileSync('.github/workflows/pages.yml', 'utf8');
+  assert.ok(pagesYml.includes('actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8'));
+  assert.ok(pagesYml.includes('actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d'));
+  assert.ok(pagesYml.includes('actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9'));
+  assert.ok(pagesYml.includes('actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346'));
+
+  // 3. Assemble complete GitHub Pages bundle in an isolated temp directory, build precache.json, and pass weight-gate
+  const scratchDir = mkdtempSync(join(tmpdir(), 'verdant-aqm-pages-'));
+  try {
+    writeFileSync(
+      join(scratchDir, 'index.html'),
+      '<!doctype html><html lang="en"><head><link rel="stylesheet" href="./assets/app.css"></head><body><script type="module" src="./assets/index.js"></script></body></html>',
+    );
+    copyFileSync('public/sw.js', join(scratchDir, 'sw.js'));
+    copyFileSync('public/favicon.svg', join(scratchDir, 'favicon.svg'));
+
+    const assembled = await assemblePagesSite(scratchDir);
+    assert.ok(assembled.holoBytes > 3000);
+    assert.equal(assembled.archiveFingerprint.length, 64);
+
+    const precache = buildPrecacheManifest(scratchDir);
+    assert.equal(precache.version.length, 16);
+    assert.ok(precache.files.some((f) => f.path === './app.holo' && f.eager === true));
+    assert.ok(precache.files.some((f) => f.path === './manifest.webmanifest' && f.eager === true));
+
+    const gate = await verifyAssembledPagesSite(scratchDir);
+    assert.equal(gate.valid, true);
+    assert.equal(gate.vectorsPassed, 26);
+  } finally {
+    rmSync(scratchDir, { recursive: true, force: true });
+  }
+});
+
 
