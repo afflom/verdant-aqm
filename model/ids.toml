@@ -127,3 +127,20 @@ suite = "aqm"
 statement = "uor-matmul zero-decode kernels (Grid<16>, Packed<Grid<16>, 2>, Runs<Grid<16>, 16>) contract in 128-bit BigInt accumulators without float decode, paired with UTQC Row-Honesty ledger enforcement."
 failure = "HonestyVerdict::RefuseBenchMarkedAsProof"
 negative = "aqm:defect:honesty-inflation"
+
+[[capabilities]]
+id = "AQ-17"
+level = "build"
+suite = "aqm"
+statement = "Prism algebraic monoid canonicalizer fuses Z_8 phase octants (T, S, Z), cancels self-inverse Clifford/2-qubit involutions, pushes diagonal phases across CNOT-controls and CZ wires, and refuses non-commuting gate reorderings."
+failure = "UnitaryInvariantError::NonUnitaryOperator"
+negative = "aqm:defect:illegal-commute"
+
+[[capabilities]]
+id = "AQ-18"
+level = "build"
+suite = "aqm"
+statement = "Zero-import wasm32 Hologram v4 guest exports hardware i64.popcnt symplectic commutativity, Packed<Grid<16>, 2> i64 GEMV, and k7 Tropical (min, +) closure kernels with bit-exact constructive parity."
+failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
+negative = "aqm:defect:oob"
+

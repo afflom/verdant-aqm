@@ -4,9 +4,8 @@ import {
   CANONICAL_ATLAS_PARAMS,
   PARAMETRIC_CHECK_ATLAS_PARAMS,
   buildAtlasGenerators,
-  createInitialAtlasState,
   decideUtqcRowHonesty,
-  stepAtlasHolospace,
+  executeAtlasHolospaceBatch,
   verifyAtlasMtcAxioms,
   weaveOpenQasmWithSkWeaver,
 } from '../aqm/atlasUtqc';
@@ -17,10 +16,11 @@ import {
   decideMatmulCodedAdmission,
   packGrid16Nibbles,
 } from '../aqm/codedMatmul';
-import { createInitialCyclotomicState, stepCyclotomicGate } from '../aqm/cyclotomic';
+import { executeCyclotomicBatch } from '../aqm/cyclotomic';
+import { runWasmPacked4Gemv } from '../aqm/holoGuest';
 import { createInitialExactMps, getMpsBondDimensions, stepExactMpsGate } from '../aqm/mps';
-import { createInitialTableau, stepStabilizerTableau } from '../aqm/stabilizer';
-import { AqmCircuitSpec, GateKind } from '../aqm/types';
+import { executeStabilizerBatch } from '../aqm/stabilizer';
+import { AqmCircuitSpec, AqmGateStep, GateKind } from '../aqm/types';
 
 interface AtlasMegascalePanelProps {
   onLoadCircuitIntoStudio: (spec: AqmCircuitSpec) => void;
@@ -50,46 +50,37 @@ ry(pi/3) q[2];
 cx q[1], q[2];
 t q[0];`;
 
-function runMegascaleBenchSuite(scaleMultiplier: 1 | 2): MegascaleBenchRow[] {
+type BenchScalePreset = 1 | 2 | 8;
+
+function runMegascaleBenchSuite(scaleMultiplier: BenchScalePreset): MegascaleBenchRow[] {
   const rows: MegascaleBenchRow[] = [];
 
-  // 1. Unbounded Sparse Z[zeta_8] Cat State (`Runs<Grid<16>, 16>`)
-  const qSparse = 512 * scaleMultiplier; // 512 or 1,024 qubits
-  const t0 = performance.now();
-  let sparseState = createInitialCyclotomicState(qSparse);
-  sparseState = stepCyclotomicGate(
-    sparseState,
-    { id: 'h0', kind: GateKind.H, targets: [0] },
-    0.5,
-  ).nextState;
+  // 1. Unbounded Sparse Z[zeta_8] Cat State (`Runs<Grid<16>, 16>` in-place BigInt ket map)
+  const qSparse = 512 * scaleMultiplier; // 512, 1,024, or 4,096 qubits
+  const sparseSteps: AqmGateStep[] = [{ id: 'h0', kind: GateKind.H, targets: [0] }];
   for (let i = 0; i < qSparse - 1; i += 1) {
-    sparseState = stepCyclotomicGate(
-      sparseState,
-      { id: `cx-${i}`, kind: GateKind.CNOT, targets: [i, i + 1] },
-      0.5,
-    ).nextState;
+    sparseSteps.push({ id: `cx-${i}`, kind: GateKind.CNOT, targets: [i, i + 1] });
   }
-  sparseState = stepCyclotomicGate(
-    sparseState,
-    { id: 't-end', kind: GateKind.T, targets: [qSparse - 1] },
-    0.5,
-  ).nextState;
+  sparseSteps.push({ id: 't-end', kind: GateKind.T, targets: [qSparse - 1] });
+
+  const t0 = performance.now();
+  const sparseState = executeCyclotomicBatch(qSparse, sparseSteps);
   const dtSparse = performance.now() - t0;
 
   rows.push({
     id: 'sparse-cyclotomic',
     engineName: 'Sparse Z[ζ₈] Runs<Grid<16>,16>',
     qubits: qSparse,
-    gateCount: qSparse + 1,
+    gateCount: sparseSteps.length,
     elapsedMs: dtSparse,
     activeStateFootprint: `${sparseState.support.size} exact kets (~192 B)`,
     denseClassicalEquivalent: `2^${qSparse} × 16 B (infeasible)`,
-    detail: `Exact BigInt ket support over Z[ζ₈] (k14 normDenom = ${sparseState.normDenom.p.toString()}); zero floating-point drift.`,
+    detail: `In-place BigInt ket map over Z[ζ₈] (k14 normDenom = ${sparseState.normDenom.p.toString()}); zero float drift.`,
     ledgerTier: 'open',
   });
 
   // 2. Exact Q(zeta_8) Matrix Product State (`ExactMps`)
-  const qMps = 64 * scaleMultiplier; // 64 or 128 non-Clifford qubits
+  const qMps = scaleMultiplier === 8 ? 128 : 64 * scaleMultiplier; // 64 or 128 non-Clifford qubits
   const t1 = performance.now();
   let mps = createInitialExactMps(qMps);
   let mpsGates = 0;
@@ -130,64 +121,58 @@ function runMegascaleBenchSuite(scaleMultiplier: 1 | 2): MegascaleBenchRow[] {
     ledgerTier: 'open',
   });
 
-  // 3. 64-Bit Word-Packed Gottesman-Knill F_2 Symplectic Tableau
-  const qTab = 256 * scaleMultiplier; // 256 or 512 qubits
+  // 3. Column-Transposed 32-Row Bit-Plane Gottesman-Knill F_2 Tableau (`O(n/32)` per gate!)
+  const qTab = 256 * scaleMultiplier; // 256, 512, or 2,048 qubits
+  const tabSteps: AqmGateStep[] = [];
+  for (let i = 0; i < qTab; i += 1) {
+    tabSteps.push({ id: `th-${i}`, kind: GateKind.H, targets: [i] });
+  }
+  for (let i = 0; i < qTab; i += 1) {
+    tabSteps.push({ id: `tcz-${i}`, kind: GateKind.CZ, targets: [i, (i + 1) % qTab] });
+  }
   const t2 = performance.now();
-  let tab = createInitialTableau(qTab);
-  for (let i = 0; i < qTab; i += 1) {
-    tab = stepStabilizerTableau(tab, { id: `th-${i}`, kind: GateKind.H, targets: [i] }, 0.5)
-      .nextTableau;
-  }
-  for (let i = 0; i < qTab; i += 1) {
-    tab = stepStabilizerTableau(
-      tab,
-      { id: `tcz-${i}`, kind: GateKind.CZ, targets: [i, (i + 1) % qTab] },
-      0.5,
-    ).nextTableau;
-  }
+  const colTab = executeStabilizerBatch(qTab, tabSteps);
   const dtTab = performance.now() - t2;
-  const tabBytes = tab.xWords.byteLength + tab.zWords.byteLength + tab.r.byteLength;
+  const tabBytes = colTab.colX.byteLength + colTab.colZ.byteLength + colTab.rPlanes.byteLength;
 
   rows.push({
     id: 'word-tableau',
-    engineName: '64-Bit Word-Packed F₂ Tableau',
+    engineName: 'Column Bit-Plane F₂ Tableau',
     qubits: qTab,
-    gateCount: qTab * 2,
+    gateCount: tabSteps.length,
     elapsedMs: dtTab,
-    activeStateFootprint: `${(tabBytes / 1024).toFixed(1)} KiB (${tab.wordsPerRow}×64b/row)`,
+    activeStateFootprint: `${(tabBytes / 1024).toFixed(1)} KiB (${colTab.planesPerCol}×32b/col)`,
     denseClassicalEquivalent: `2^${qTab} × 16 B`,
-    detail: `O(n²/64) BigUint64Array word-XOR symplectic stabilizer evolution.`,
+    detail: `O(n/32) column-transposed Uint32Array bit-plane Clifford evolution (zero heap allocs/gate).`,
     ledgerTier: 'open',
   });
 
-  // 4. UOR Atlas Topological Carrier + BLAKE3 kappa Prefix-State Elision
-  const qAtlas = 2048 * scaleMultiplier; // 2,048 or 4,096 qubits
-  const atlasSteps = 256 * scaleMultiplier;
-  const t3 = performance.now();
-  let atlasState = createInitialAtlasState(qAtlas);
-  const kappaCache = new Set<string>();
+  // 4. UOR Atlas Topological Carrier + Live BLAKE3 kappa Transition Memoization
+  const qAtlas = 2048 * scaleMultiplier; // 2,048, 4,096, or 16,384 qubits!
+  const atlasStepsCount = 256 * scaleMultiplier;
   const periodicKinds = [GateKind.H, GateKind.T, GateKind.S, GateKind.X];
-  for (let s = 0; s < atlasSteps; s += 1) {
-    const kind = periodicKinds[s % periodicKinds.length];
-    const wire = (s * 17) % qAtlas;
-    atlasState = stepAtlasHolospace(
-      atlasState,
-      { id: `at-${s}`, kind, targets: [wire] },
-      kappaCache,
-    ).nextState;
+  const atlasSteps: AqmGateStep[] = new Array(atlasStepsCount);
+  for (let s = 0; s < atlasStepsCount; s += 1) {
+    atlasSteps[s] = {
+      id: `at-${s}`,
+      kind: periodicKinds[s % periodicKinds.length],
+      targets: [(s * 17) % qAtlas],
+    };
   }
+  const t3 = performance.now();
+  const atlasState = executeAtlasHolospaceBatch(qAtlas, atlasSteps);
   const dtAtlas = performance.now() - t3;
-  const hitPct = ((atlasState.elidedStepHits / atlasSteps) * 100).toFixed(1);
+  const hitPct = ((atlasState.elidedStepHits / atlasStepsCount) * 100).toFixed(1);
 
   rows.push({
     id: 'atlas-holospace',
     engineName: 'UOR Atlas (4,3,8) + BLAKE3 κ',
     qubits: qAtlas,
-    gateCount: atlasSteps,
+    gateCount: atlasStepsCount,
     elapsedMs: dtAtlas,
-    activeStateFootprint: `768 B carrier · ${hitPct}% κ elision`,
+    activeStateFootprint: `768 B carrier · ${hitPct}% κ memoized`,
     denseClassicalEquivalent: `2^${qAtlas} × 16 B`,
-    detail: `96-class reflection carrier (σ, τ, μ) + ${atlasState.elidedStepHits}/${atlasSteps} repeated BLAKE3 prefix states elided.`,
+    detail: `96-class reflection carrier (σ, τ, μ) + live BLAKE3 κ transition cache (${atlasState.elidedStepHits}/${atlasStepsCount} elided).`,
     ledgerTier: 'open',
   });
 
@@ -197,9 +182,9 @@ function runMegascaleBenchSuite(scaleMultiplier: 1 | 2): MegascaleBenchRow[] {
 export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
   onLoadCircuitIntoStudio,
 }) => {
-  const [scaleMultiplier, setScaleMultiplier] = useState<1 | 2>(2);
+  const [scaleMultiplier, setScaleMultiplier] = useState<BenchScalePreset>(2);
   const [benchRows, setBenchRows] = useState<readonly MegascaleBenchRow[]>(() =>
-    runMegascaleBenchSuite(1),
+    runMegascaleBenchSuite(2),
   );
 
   // OpenQASM 2.0 SkWeaver Compiler state
@@ -264,7 +249,14 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
       intermediateFloatDecode: false,
       exactChecksumMatches: true,
     });
-    return { grid, packed, runs, admission };
+    const wasmGemv = runWasmPacked4Gemv(
+      new Int32Array(colIndices.map((idx) => Number(codebook[idx]))),
+      packGrid16Nibbles(rowIndices),
+      new Int32Array(codebook.map((v) => Number(v))),
+      1,
+      8,
+    );
+    return { grid, packed, runs, admission, wasmGemv };
   }, []);
 
   const honestyVerdict = useMemo(
@@ -278,7 +270,7 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
     [honestyClaimTier],
   );
 
-  const handleRunBenchmarks = (mult: 1 | 2) => {
+  const handleRunBenchmarks = (mult: BenchScalePreset) => {
     setScaleMultiplier(mult);
     setBenchRows(runMegascaleBenchSuite(mult));
   };
@@ -312,14 +304,25 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
                 : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Run Standard Scale (64–2,048q)
+            Standard (64–2,048q)
           </button>
           <button
             type="button"
             onClick={() => handleRunBenchmarks(2)}
+            className={`h-10 px-3.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 ${
+              scaleMultiplier === 2
+                ? 'bg-slate-900 dark:bg-slate-800 text-white border-emerald-500'
+                : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            Megascale (128–4,096q)
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRunBenchmarks(8)}
             className="h-10 px-4 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0"
           >
-            Run Megascale Suite (128–4,096 Qubits)
+            Extreme Prism Scale (128–16,384 Qubits)
           </button>
         </div>
       </div>
@@ -456,6 +459,7 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
                   <option value={0.05}>0.05</option>
                   <option value={0.02}>0.02</option>
                   <option value={0.005}>0.005</option>
+                  <option value={0.0001}>0.0001 (CF+SK)</option>
                 </select>
               </label>
             </div>
@@ -630,6 +634,12 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
                 <span>Runs&lt;Grid&lt;16&gt;, 16&gt; Sparse (64×64)</span>
                 <span className="text-emerald-600 dark:text-emerald-400">
                   {codedKernelDemo.runs.skippedZeroEntries}/4096 zeros skipped
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-between">
+                <span>wasm32 Packed4 i64 GEMV (AQ-18)</span>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  out[0]={String(codedKernelDemo.wasmGemv.out[0])} · {codedKernelDemo.wasmGemv.codedOps} ops
                 </span>
               </div>
             </div>

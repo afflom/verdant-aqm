@@ -23,14 +23,22 @@ honesty_verdict = "admitRow"
 
 [[rows]]
 id = "LEDGER-04"
-tier = "build"
-statement = "Unbounded Sparse Z[zeta_8] ket engine, ExactMps Z[zeta_8] tensor-train engine, 64-bit F_2 tableau, parametric [[d^2, 1, d]] surface code, Atlas C(Z_3 x Z_2^3, q) verifier, SkWeaver OpenQASM compiler, and zero-import VerdantAqm.holo Core-Wasm guest."
-anchor = "AQ-01..AQ-16 + 10 planted-defect refusal gates"
+tier = "some-true"
+statement = "Continued-fraction convergents and Solovay-Kitaev group commutators synthesize SU(2) target rotations to precision epsilon in O(log^c(1/epsilon)) word length."
+anchor = "Dawson & Nielsen (2006), arXiv:quant-ph/0505030; Khinchin (1964)"
 honesty_verdict = "admitRow"
 
 [[rows]]
 id = "LEDGER-05"
+tier = "build"
+statement = "Unbounded Sparse Z[zeta_8] ket engine, ExactMps Q(zeta_8) tensor-train engine, O(n/32) column-transposed bit-plane F_2 tableau, Prism monoid gate-fusion canonicalizer, parametric [[d^2, 1, d]] surface code (d=3..11), Atlas C(Z_3 x Z_2^3, q) verifier, Continued-Fraction + Solovay-Kitaev SkWeaver, and 6-export zero-import wasm32 VerdantAqm.holo v4 compute guest."
+anchor = "AQ-01..AQ-18 + 9 planted-defect refusal gates + 26 Wasm acceptance vectors"
+honesty_verdict = "admitRow"
+
+[[rows]]
+id = "LEDGER-06"
 tier = "open"
-statement = "Measured wall-clock runtime, active ket/MPS rank compression, and BLAKE3 kappa-addressed prefix-state elision across 64..4,096-qubit structured circuits in browser memory."
+statement = "Measured wall-clock runtime, gate-fusion compression ratio, active ket/MPS rank compression, and BLAKE3 kappa-addressed prefix-state memoization across 64..16,384-qubit structured circuits in browser memory."
 anchor = "Empirical live benchmark in AtlasMegascalePanel (never claimed as unconditional BQP subset P collapse)"
 honesty_verdict = "admitRow"
+

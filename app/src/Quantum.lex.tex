@@ -284,5 +284,36 @@ theorem{
   axioms: []
 }
 
+definition{
+  name: phaseOctantFusionMod8,
+  parameters: [octA : Nat, octB : Nat],
+  result: Nat,
+  body: ((octA + octB) % (natEight)),
+  axioms: []
+}
+
+definition{
+  name: gateIsSelfInverse,
+  parameters: [k : GateKind],
+  result: Bool,
+  body: (match k
+    | GateKind.phaseS => false
+    | GateKind.tGate => false
+    | GateKind.measureZ => false
+    | _ => true),
+  axioms: []
+}
+
+theorem{
+  name: inv011PhaseOctantFusionIdentity,
+  statement: ((((phaseOctantFusionMod8 (natOne) ((natEight) - (natOne))) = 0)
+    ∧ ((phaseOctantFusionMod8 (natTwo) (natTwo)) = (natFour)))
+    ∧ (((gateIsSelfInverse GateKind.hadamard) = true)
+      ∧ ((gateIsSelfInverse GateKind.tGate) = false))),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}
+

@@ -1,5 +1,5 @@
 /**
- * Verdant AQM — Complete Prism Conformance & Unit Test Suite (`AQ-01` .. `AQ-16`)
+ * Verdant AQM — Complete Prism Conformance & Unit Test Suite (`AQ-01` .. `AQ-18`)
  * Run via: npx --yes tsx --test src/aqm/aqm.test.ts
  */
 
@@ -12,6 +12,8 @@ import {
   buildAtlasGenerators,
   createInitialAtlasState,
   decideUtqcRowHonesty,
+  executeAtlasHolospaceBatch,
+  inspectAtlasState,
   stepAtlasHolospace,
   verifyAtlasMtcAxioms,
   weaveOpenQasmWithSkWeaver,
@@ -27,7 +29,9 @@ import {
 } from './codedMatmul';
 import {
   Z8_ONE,
+  computeExactTotalNormSqSparse,
   createInitialCyclotomicState,
+  executeCyclotomicBatch,
   inspectCyclotomicState,
   stepCyclotomicGate,
   z8Add,
@@ -41,6 +45,8 @@ import {
   instantiateHoloCoreWasmGuest,
   parseAndVerifyHoloV4Archive,
   runHoloCoreWasmGuest,
+  runWasmPacked4Gemv,
+  runWasmSymplecticCommute,
 } from './holoGuest';
 import {
   createStitchParityBundle,
@@ -60,14 +66,18 @@ import {
   CORE_WASM_ACCEPTANCE_VECTORS,
   PLANTED_DEFECT_CATALOG,
   dispatchCoreWasmQuery,
+  optimizeCircuitPrismMonoid,
   runAllAcceptanceVectors,
   verifyAndCompileCircuitPrism,
+  verifyGateCommutationLegal,
 } from './prismKernel';
 import { sha256Hex } from './sha256';
 import { routePromptWithCodedSlm } from './slm';
 import {
   PauliFault,
+  columnPlanesToSymplecticTableau,
   createInitialTableau,
+  executeStabilizerBatch,
   stepStabilizerTableau,
   verifyStabilizersCommute,
   verifySurfaceCodeCommutativity,
@@ -460,8 +470,8 @@ test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm
   assert.equal(reconstructFromStitchShards(bundle, [false, true, true]).integrityVerified, true);
 
   assert.equal(routePromptWithCodedSlm('clone q0 onto q0').admitted, false);
-  assert.equal(runAllAcceptanceVectors().passed, 24);
-  assert.equal(PLANTED_DEFECT_CATALOG.length, 8);
+  assert.equal(runAllAcceptanceVectors().passed, 26);
+  assert.equal(PLANTED_DEFECT_CATALOG.length, 9);
   for (const defect of PLANTED_DEFECT_CATALOG) {
     assert.equal(defect.run().gateTriggered, true);
   }
@@ -473,6 +483,7 @@ test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm
   assert.equal(verified.version, 4);
   assert.equal(verified.manifestLength, 356);
   assert.equal(verified.zeroImportsVerified, true);
+  assert.equal(verified.exportedSymbols.length, 6);
 
   const guest = await instantiateHoloCoreWasmGuest(verified.wasmBytes);
   for (const vec of CORE_WASM_ACCEPTANCE_VECTORS) {
@@ -501,3 +512,131 @@ test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm
   assert.equal(raster.telemetry.tileEdgePx, TILE_EDGE_PX);
   assert.ok(raster.telemetry.activeTiles > 0);
 });
+
+test('AQ-17 & AQ-18: Prism Monoid Gate-Fusion, Zero-Import wasm32 Compute Kernels, and 16,384q Extreme Scale', () => {
+  // 1. AQ-17 Prism Monoid Gate-Fusion & Involution Cancellation + Unitary Equivalence
+  const unoptimizedSpec = {
+    name: 'Unfused Clifford+T',
+    description: 'Contains commuting diagonal pushes, Z_8 octant wrap, and H^2 involution',
+    qubitCount: 2,
+    seed: 7,
+    backend: AqmBackendMode.CyclotomicExact,
+    steps: [
+      { id: 'u0', kind: GateKind.H, targets: [0] },
+      { id: 'u1', kind: GateKind.CNOT, targets: [0, 1] },
+      { id: 'u2', kind: GateKind.T, targets: [0] },
+      { id: 'u3', kind: GateKind.CZ, targets: [0, 1] },
+      { id: 'u4', kind: GateKind.T, targets: [0] },
+      { id: 'u5', kind: GateKind.S, targets: [0] },
+      { id: 'u6', kind: GateKind.Z, targets: [0] },
+      { id: 'u7', kind: GateKind.H, targets: [1] },
+      { id: 'u8', kind: GateKind.H, targets: [1] },
+    ],
+  };
+  const fused = optimizeCircuitPrismMonoid(unoptimizedSpec);
+  assert.equal(fused.ok, true);
+  if (!fused.ok) return;
+  assert.equal(fused.gatesEliminated, 6);
+  assert.equal(fused.fusedGateCount, 3);
+
+  const rawState = executeCyclotomicBatch(2, unoptimizedSpec.steps);
+  const fusedState = executeCyclotomicBatch(2, fused.optimizedSpec.steps);
+  assert.deepEqual(rawState.normDenom, fusedState.normDenom);
+  assert.deepEqual(Array.from(rawState.support.entries()), Array.from(fusedState.support.entries()));
+
+  // Illegal commutation guard: T(q1) across CNOT(q0, q1) target is refused!
+  const illegalSwap = verifyGateCommutationLegal(
+    { id: 't1', kind: GateKind.T, targets: [1] },
+    { id: 'cx01', kind: GateKind.CNOT, targets: [0, 1] },
+  );
+  assert.equal(illegalSwap.ok, false);
+
+  // 2. AQ-18 Zero-Import wasm32 Compute Kernels (Symplectic i64.popcnt, Packed4 GEMV, Tropical k7 d=11)
+  const x1 = new BigUint64Array([0b1011n, 0n]);
+  const z1 = new BigUint64Array([0b0100n, 0n]);
+  const x2 = new BigUint64Array([0b0100n, 0n]);
+  const z2 = new BigUint64Array([0b0001n, 0n]);
+  // Inner product: popcnt((1011 & 0001) ^ (0100 & 0100)) = popcnt(0001 ^ 0100) = 2 (even -> commutes!)
+  assert.equal(runWasmSymplecticCommute(x1, z1, x2, z2), true);
+  // Flip bit 1 in z2 so anti-commuting overlap is 3 (odd -> anti-commutes!)
+  assert.equal(runWasmSymplecticCommute(x1, z1, x2, new BigUint64Array([0b0011n, 0n])), false);
+
+  const grid16 = new Int32Array([-8, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12]);
+  const act = new Int32Array([12, 1, 0, -6]);
+  const nibs = packGrid16Nibbles([15, 8, 7, 0]);
+  const wasmGemv = runWasmPacked4Gemv(act, nibs, grid16, 1, 2);
+  assert.equal(wasmGemv.out[0], 193n);
+  assert.equal(wasmGemv.codedOps, 4);
+
+  // d=11 [[121, 1, 11]] Surface Code commutativity + weight-5 fault correction via Wasm Tropical (min, +)
+  assert.equal(verifySurfaceCodeCommutativity(11), true);
+  const faultsD11: PauliFault[] = new Array(121).fill('I');
+  faultsD11[13] = 'X';
+  faultsD11[37] = 'Z';
+  faultsD11[60] = 'Y';
+  faultsD11[84] = 'X';
+  faultsD11[107] = 'Z';
+  const decodedD11 = decodeSurfaceCodeTropical(faultsD11, 11);
+  assert.equal(decodedD11.wasmAccelerated, true);
+  assert.equal(decodedD11.postDecodeExcitedIds.length, 0);
+  assert.equal(decodedD11.logicalPreserved, true);
+
+  // 3. Bit-for-bit parity of ColumnBitPlaneTableau vs row-packed SymplecticTableau + 2,048q batch
+  const cliffSteps = [
+    { id: 'c0', kind: GateKind.H, targets: [0] },
+    { id: 'c1', kind: GateKind.S, targets: [0] },
+    { id: 'c2', kind: GateKind.CNOT, targets: [0, 33] },
+    { id: 'c3', kind: GateKind.CZ, targets: [33, 63] },
+    { id: 'c4', kind: GateKind.Y, targets: [63] },
+    { id: 'c5', kind: GateKind.SWAP, targets: [0, 63] },
+  ];
+  let refTab = createInitialTableau(64);
+  for (const st of cliffSteps) {
+    refTab = stepStabilizerTableau(refTab, st, 0.5).nextTableau;
+  }
+  const planeTab = columnPlanesToSymplecticTableau(executeStabilizerBatch(64, cliffSteps));
+  assert.deepEqual(planeTab.xWords, refTab.xWords);
+  assert.deepEqual(planeTab.zWords, refTab.zWords);
+  assert.deepEqual(planeTab.r, refTab.r);
+
+  const bigCliffSteps = [];
+  for (let i = 0; i < 2048; i += 1) {
+    bigCliffSteps.push({ id: `bh-${i}`, kind: GateKind.H, targets: [i] });
+    bigCliffSteps.push({ id: `bcx-${i}`, kind: GateKind.CNOT, targets: [i, (i + 1) % 2048] });
+  }
+  const tab2048 = executeStabilizerBatch(2048, bigCliffSteps);
+  assert.equal(tab2048.n, 2048);
+  assert.equal(tab2048.planesPerCol, 128);
+
+  // 4. 4,096-qubit Sparse Z[zeta_8] GHZ+T Cat State batch with exact k14 norm = 1
+  const cat4096Steps = [{ id: 'gh0', kind: GateKind.H, targets: [0] }];
+  for (let i = 0; i < 4095; i += 1) {
+    cat4096Steps.push({ id: `gcx-${i}`, kind: GateKind.CNOT, targets: [i, i + 1] });
+  }
+  cat4096Steps.push({ id: 'gt-last', kind: GateKind.T, targets: [4095] });
+  const cat4096 = executeCyclotomicBatch(4096, cat4096Steps);
+  assert.equal(cat4096.support.size, 2);
+  const norm4096 = computeExactTotalNormSqSparse(cat4096.support);
+  assert.deepEqual(norm4096, cat4096.normDenom);
+
+  // 5. 16,384-qubit UOR Atlas Holospace batch + CF+Solovay-Kitaev SkWeaver epsilon = 0.0001
+  const atlasSteps = [];
+  for (let i = 0; i < 2048; i += 1) {
+    atlasSteps.push({ id: `at-${i}`, kind: GateKind.T, targets: [(i * 7) % 16384] });
+  }
+  const atlas16k = executeAtlasHolospaceBatch(16384, atlasSteps);
+  assert.equal(atlas16k.qubitCount, 16384);
+  assert.ok(atlas16k.elidedStepHits >= 2040);
+  assert.equal(inspectAtlasState(atlas16k).conservation.normExactOne, true);
+
+  const qasmSk = `OPENQASM 2.0; qreg q[3]; rz(pi/5) q[0]; rx(pi/7) q[1]; ry(pi/11) q[2];`;
+  const wovenSk = weaveOpenQasmWithSkWeaver(qasmSk, 'Certified22', 0.0001);
+  assert.equal(wovenSk.ok, true);
+  if (wovenSk.ok) {
+    assert.ok(
+      wovenSk.maxProjectiveResidual < 1e-4,
+      `Expected CF+SK residual < 1e-4, got ${wovenSk.maxProjectiveResidual}`,
+    );
+  }
+});
+

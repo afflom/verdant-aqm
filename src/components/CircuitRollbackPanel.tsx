@@ -341,6 +341,82 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
             </div>
           </form>
 
+          {/* Prism Algebraic Monoid Gate-Fusion & Involution Canonicalizer (AQ-17) */}
+          {session && (
+            <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Prism Monoid Gate-Fusion &amp; Involution Pass (AQ-17)
+                </div>
+                <div className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                  <span>
+                    {session.fusionReport.rawGateCount} → {session.fusionReport.fusedGateCount} gates
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>
+                    Depth {session.fusionReport.rawDepth} → {session.fusionReport.fusedDepth}
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span className="text-emerald-700 dark:text-emerald-400">
+                    {session.fusionReport.gatesEliminated} eliminated ({session.fusionReport.phaseOctantMerges} Z₈ merges, {session.fusionReport.involutionCancellations} involutions)
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const q0 = 0;
+                    const q1 = Math.min(1, spec.qubitCount - 1);
+                    const base = Date.now();
+                    const extra: AqmGateStep[] =
+                      spec.backend === AqmBackendMode.StabilizerTableau
+                        ? [
+                            { id: `pr-${base}-0`, kind: GateKind.S, targets: [q0] },
+                            ...(q1 !== q0
+                              ? [{ id: `pr-${base}-1`, kind: GateKind.CZ, targets: [q0, q1] }]
+                              : []),
+                            { id: `pr-${base}-2`, kind: GateKind.S, targets: [q0] },
+                            { id: `pr-${base}-3`, kind: GateKind.Z, targets: [q0] },
+                            { id: `pr-${base}-4`, kind: GateKind.H, targets: [q1] },
+                            { id: `pr-${base}-5`, kind: GateKind.H, targets: [q1] },
+                          ]
+                        : [
+                            { id: `pr-${base}-0`, kind: GateKind.T, targets: [q0] },
+                            ...(q1 !== q0
+                              ? [{ id: `pr-${base}-1`, kind: GateKind.CZ, targets: [q0, q1] }]
+                              : []),
+                            { id: `pr-${base}-2`, kind: GateKind.T, targets: [q0] },
+                            { id: `pr-${base}-3`, kind: GateKind.S, targets: [q0] },
+                            { id: `pr-${base}-4`, kind: GateKind.Z, targets: [q0] },
+                            { id: `pr-${base}-5`, kind: GateKind.H, targets: [q1] },
+                            { id: `pr-${base}-6`, kind: GateKind.H, targets: [q1] },
+                          ];
+                    const nextSteps = [...spec.steps, ...extra];
+                    onUpdateSpec({ ...spec, steps: nextSteps }, nextSteps.length);
+                  }}
+                  className="h-9 px-3 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Plant Redundant Gates
+                </button>
+                <button
+                  type="button"
+                  disabled={session.fusionReport.gatesEliminated === 0}
+                  onClick={() =>
+                    onUpdateSpec(
+                      session.fusionReport.optimizedSpec,
+                      session.fusionReport.optimizedSpec.steps.length,
+                    )
+                  }
+                  className="h-9 px-3.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white disabled:opacity-40 hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Apply Prism Fusion
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Interactive SVG Topological Circuit & Tropical Causal Lightcone Diagram */}
           <div className="p-4 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">

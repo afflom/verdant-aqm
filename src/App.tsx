@@ -74,8 +74,8 @@ export default function App() {
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
 
-  // Parametric Surface-Code QEC state (d in {3, 5, 7, 9}, synced between 3D Studio and QEC workspace)
-  const [surfaceDistance, setSurfaceDistance] = useState<3 | 5 | 7 | 9>(3);
+  // Parametric Surface-Code QEC state (d in {3, 5, 7, 9, 11}, synced between 3D Studio and QEC workspace)
+  const [surfaceDistance, setSurfaceDistance] = useState<3 | 5 | 7 | 9 | 11>(3);
   const [surfaceFaults, setSurfaceFaults] = useState<PauliFault[]>(() => {
     const init = new Array<PauliFault>(9).fill('I');
     init[4] = 'X';
@@ -160,7 +160,7 @@ export default function App() {
     setSaliencePotentials(cyberneticLoop.stepFocus(wire % 8));
   };
 
-  const handleChangeSurfaceDistance = (nextD: 3 | 5 | 7 | 9) => {
+  const handleChangeSurfaceDistance = (nextD: 3 | 5 | 7 | 9 | 11) => {
     setSurfaceDistance(nextD);
     const total = nextD * nextD;
     const fresh = new Array<PauliFault>(total).fill('I');
@@ -414,7 +414,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setDockCollapsed((c) => !c)}
-                  className="h-8 px-3.5 rounded-full bg-[#0F1622] text-slate-200 border border-slate-700 hover:border-emerald-500 text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  className="h-8 px-3.5 rounded-lg bg-[#0F1622] text-slate-200 border border-slate-700 hover:border-emerald-500 text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                 >
                   {dockCollapsed ? (
                     <>
@@ -466,7 +466,9 @@ export default function App() {
                           aria-label="3D surface code distance"
                           value={surfaceDistance}
                           onChange={(e) =>
-                            handleChangeSurfaceDistance(Number(e.target.value) as 3 | 5 | 7 | 9)
+                            handleChangeSurfaceDistance(
+                              Number(e.target.value) as 3 | 5 | 7 | 9 | 11,
+                            )
                           }
                           className="h-8 px-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-slate-200"
                         >
@@ -474,6 +476,7 @@ export default function App() {
                           <option value={5}>d=5 (25q)</option>
                           <option value={7}>d=7 (49q)</option>
                           <option value={9}>d=9 (81q)</option>
+                          <option value={11}>d=11 (121q)</option>
                         </select>
                         <button
                           type="button"

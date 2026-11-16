@@ -8,11 +8,11 @@ import {
 import { TropicalSyndromeDecodeResult } from '../aqm/tropical';
 
 interface SurfaceCodePanelProps {
-  distance: 3 | 5 | 7 | 9;
+  distance: 3 | 5 | 7 | 9 | 11;
   faults: readonly PauliFault[];
   activeBrush: PauliFault;
   lastDecode: TropicalSyndromeDecodeResult | null;
-  onChangeDistance: (d: 3 | 5 | 7 | 9) => void;
+  onChangeDistance: (d: 3 | 5 | 7 | 9 | 11) => void;
   onSetBrush: (brush: PauliFault) => void;
   onInjectFaultAt: (qubitIdx: number, fault?: PauliFault) => void;
   onInjectMultiFaultPreset: () => void;
@@ -74,7 +74,7 @@ export const SurfaceCodePanel: React.FC<SurfaceCodePanelProps> = ({
             role="group"
             aria-label="Rotated surface code odd distance"
           >
-            {([3, 5, 7, 9] as const).map((d) => (
+            {([3, 5, 7, 9, 11] as const).map((d) => (
               <button
                 key={d}
                 type="button"
@@ -372,19 +372,27 @@ export const SurfaceCodePanel: React.FC<SurfaceCodePanelProps> = ({
               </p>
             ) : (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4 text-xs font-mono tabular-nums">
+                <div className="grid grid-cols-3 gap-3 text-xs font-mono tabular-nums">
                   <div>
-                    <div className="text-slate-500">Matched Path Weight</div>
+                    <div className="text-slate-500">Matched Weight</div>
                     <div className="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
                       {lastDecode.totalWeight} hop(s)
                     </div>
                   </div>
                   <div>
-                    <div className="text-slate-500">Post-Decode Syndromes</div>
+                    <div className="text-slate-500">Post-Decode</div>
                     <div className="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
                       {lastDecode.postDecodeExcitedIds.length === 0
                         ? '0 excited'
                         : lastDecode.postDecodeExcitedIds.join(', ')}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Wasm k7 Closure</div>
+                    <div className="mt-0.5 text-base font-semibold text-emerald-600 dark:text-emerald-400">
+                      {lastDecode.wasmAccelerated
+                        ? `● ${lastDecode.wasmRelaxations} relax`
+                        : 'JS fallback'}
                     </div>
                   </div>
                 </div>

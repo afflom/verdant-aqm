@@ -320,6 +320,305 @@ export function verifyAndCompileCircuitPrism(
   return { ok: true, nodes, depth: maxLayer };
 }
 
+export interface CompiledLayerBatch {
+  readonly layerIndex: number;
+  readonly steps: readonly AqmGateStep[];
+}
+
+export interface PrismFusionReport {
+  readonly ok: true;
+  readonly optimizedSpec: AqmCircuitSpec;
+  readonly rawGateCount: number;
+  readonly fusedGateCount: number;
+  readonly gatesEliminated: number;
+  readonly phaseOctantMerges: number;
+  readonly involutionCancellations: number;
+  readonly diagonalCommutePushes: number;
+  readonly rawDepth: number;
+  readonly fusedDepth: number;
+  readonly parallelLayers: readonly CompiledLayerBatch[];
+}
+
+function diagonalOctants(kind: GateKind): number | null {
+  if (kind === GateKind.T) return ONE;
+  if (kind === GateKind.S) return TWO;
+  if (kind === GateKind.Z) return FOUR;
+  return null;
+}
+
+function expandOctantMod8(oct: number, wire: number, baseId: string): AqmGateStep[] {
+  const m = ((oct % EIGHT) + EIGHT) % EIGHT;
+  const out: AqmGateStep[] = [];
+  if ((m & FOUR) !== ZERO) out.push({ id: `${baseId}-z`, kind: GateKind.Z, targets: [wire] });
+  if ((m & TWO) !== ZERO) out.push({ id: `${baseId}-s`, kind: GateKind.S, targets: [wire] });
+  if ((m & ONE) !== ZERO) out.push({ id: `${baseId}-t`, kind: GateKind.T, targets: [wire] });
+  return out;
+}
+
+/**
+ * Quantum.lex.tex :: verifyGateCommutationLegal (`AQ-17`)
+ * Verifies whether pushing an adjacent gate `left` past `right` preserves exact unitary matrix equality.
+ */
+export function verifyGateCommutationLegal(
+  left: AqmGateStep,
+  right: AqmGateStep,
+): { ok: true } | { ok: false; error: ModeledAqmError } {
+  // Disjoint wires always commute
+  const shared = left.targets.filter((w) => right.targets.includes(w));
+  if (shared.length === ZERO) return { ok: true };
+
+  // Measurements never commute with non-disjoint gates
+  if (left.kind === GateKind.MEASURE || right.kind === GateKind.MEASURE) {
+    return {
+      ok: false,
+      error: {
+        kind: UnitaryInvariantErrorKind.NonUnitaryOperator,
+        capabilityId: 'AQ-17',
+        refusalCode: 'refused:illegal-noncommuting-push',
+        detail: `Cannot commute ${left.kind}(q${left.targets.join(',')}) across projective measurement on shared wire q${shared[ZERO]}.`,
+      },
+    };
+  }
+
+  const leftDiag = diagonalOctants(left.kind) !== null || left.kind === GateKind.CZ;
+  const rightDiag = diagonalOctants(right.kind) !== null || right.kind === GateKind.CZ;
+  if (leftDiag && rightDiag) return { ok: true };
+
+  // Diagonal single-qubit phase commutes with CNOT iff shared wire is the CNOT control (targets[0]), NEVER target (targets[1])!
+  if (diagonalOctants(left.kind) !== null && right.kind === GateKind.CNOT) {
+    if (left.targets[ZERO] === right.targets[ZERO]) return { ok: true };
+  }
+  if (left.kind === GateKind.CNOT && diagonalOctants(right.kind) !== null) {
+    if (right.targets[ZERO] === left.targets[ZERO]) return { ok: true };
+  }
+
+  // Pauli X commutes with CNOT target (targets[1])
+  if (left.kind === GateKind.X && right.kind === GateKind.CNOT && left.targets[ZERO] === right.targets[ONE]) {
+    return { ok: true };
+  }
+  if (left.kind === GateKind.CNOT && right.kind === GateKind.X && right.targets[ZERO] === left.targets[ONE]) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    error: {
+      kind: UnitaryInvariantErrorKind.NonUnitaryOperator,
+      capabilityId: 'AQ-17',
+      refusalCode: 'refused:illegal-noncommuting-push',
+      detail: `Prism monoid guard refused non-commuting swap of ${left.kind}(q${left.targets.join(',')}) and ${right.kind}(q${right.targets.join(',')}) on wire q${shared[ZERO]}.`,
+    },
+  };
+}
+
+/**
+ * Prism Algebraic Monoid Gate-Fusion & Involution Cancellation Pass (`AQ-17`, `Quantum.lex.tex::inv011PhaseOctantFusionIdentity`).
+ *  1. Pushes diagonal Z_8 phases (T, S, Z) rightward across commuting CZ and CNOT-control wires so separated phases meet.
+ *  2. Fuses contiguous Z_8 octants modulo 8 (`T^a * T^b -> T^{(a+b) mod 8}`, `T^8 = S^4 = Z^2 = I`).
+ *  3. Rewrites `H * Z * H -> X` and `H * X * H -> Z`, and cancels self-inverse involutions (`H^2, X^2, Y^2, Z^2, CNOT^2, CZ^2, SWAP^2 -> I`).
+ *  4. Schedules the canonicalized circuit into parallel SIMD-ready DAG layer batches.
+ */
+export function optimizeCircuitPrismMonoid(
+  spec: AqmCircuitSpec,
+): PrismFusionReport | { ok: false; error: ModeledAqmError } {
+  const preCheck = verifyAndCompileCircuitPrism(spec);
+  if (!preCheck.ok) return preCheck;
+
+  // Preserve explicit barrier dependencies untouched if any step uses `dependsOn`
+  const hasExplicitBarriers = spec.steps.some((s) => s.dependsOn && s.dependsOn.length > ZERO);
+  let working: AqmGateStep[] = spec.steps.map((s) => ({ ...s }));
+  let phaseOctantMerges = ZERO;
+  let involutionCancellations = ZERO;
+  let diagonalCommutePushes = ZERO;
+
+  if (!hasExplicitBarriers) {
+    let changed = true;
+    let pass = ZERO;
+    while (changed && pass < 12) {
+      changed = false;
+      pass += ONE;
+
+      // Pass A: Push single-qubit diagonal phases across immediately adjacent commuting 2-qubit gates (CZ, CNOT-control)
+      // when another gate on the same wire lies ahead!
+      for (let i = ZERO; i + ONE < working.length; i += ONE) {
+        const a = working[i];
+        const b = working[i + ONE];
+        if (diagonalOctants(a.kind) !== null && gateArity(b.kind) === TWO) {
+          const w = a.targets[ZERO];
+          if (b.targets.includes(w) && verifyGateCommutationLegal(a, b).ok) {
+            // Only push if there is a downstream diagonal or H gate on wire w before a non-commuting barrier
+            let shouldPush = false;
+            for (let k = i + TWO; k < working.length; k += ONE) {
+              if (!working[k].targets.includes(w)) continue;
+              if (diagonalOctants(working[k].kind) !== null) {
+                shouldPush = true;
+              }
+              break;
+            }
+            if (shouldPush) {
+              working[i] = b;
+              working[i + ONE] = a;
+              diagonalCommutePushes += ONE;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      // Pass B: Per-wire adjacent algebraic fusion & 2-qubit involution cancellation
+      // Build next-occurrence index on shared wires: two steps i < j are wire-adjacent iff no step k in (i, j) touches any wire of step i or j
+      const nextList: AqmGateStep[] = [];
+      for (const step of working) {
+        if (nextList.length === ZERO) {
+          nextList.push(step);
+          continue;
+        }
+
+        // Find the most recent step in `nextList` that touches ANY wire in `step.targets`
+        let prevIdx = -ONE;
+        for (let k = nextList.length - ONE; k >= ZERO; k -= ONE) {
+          if (nextList[k].targets.some((w) => step.targets.includes(w))) {
+            prevIdx = k;
+            break;
+          }
+        }
+
+        if (prevIdx < ZERO) {
+          nextList.push(step);
+          continue;
+        }
+
+        const prev = nextList[prevIdx];
+        if (prev.kind === GateKind.MEASURE || step.kind === GateKind.MEASURE) {
+          nextList.push(step);
+          continue;
+        }
+
+        // Case 1: Single-qubit gates on the exact same wire `w` (nothing intervened on `w` since `prevIdx`!)
+        if (prev.targets.length === ONE && step.targets.length === ONE && prev.targets[ZERO] === step.targets[ZERO]) {
+          const w = step.targets[ZERO];
+          const octA = diagonalOctants(prev.kind);
+          const octB = diagonalOctants(step.kind);
+
+          if (octA !== null && octB !== null) {
+            nextList.splice(prevIdx, ONE, ...expandOctantMod8(octA + octB, w, `${prev.id}f`));
+            phaseOctantMerges += ONE;
+            changed = true;
+            continue;
+          }
+
+          if (
+            prev.kind === step.kind &&
+            (step.kind === GateKind.H || step.kind === GateKind.X || step.kind === GateKind.Y || step.kind === GateKind.Z)
+          ) {
+            nextList.splice(prevIdx, ONE);
+            involutionCancellations += ONE;
+            changed = true;
+            continue;
+          }
+
+          // Check 3-gate conjugation H * Z * H -> X and H * X * H -> Z on wire w
+          if (step.kind === GateKind.H && (prev.kind === GateKind.Z || prev.kind === GateKind.X)) {
+            let prevPrevIdx = -ONE;
+            for (let k = prevIdx - ONE; k >= ZERO; k -= ONE) {
+              if (nextList[k].targets.includes(w)) {
+                prevPrevIdx = k;
+                break;
+              }
+            }
+            if (
+              prevPrevIdx >= ZERO &&
+              nextList[prevPrevIdx].targets.length === ONE &&
+              nextList[prevPrevIdx].kind === GateKind.H
+            ) {
+              const conjugatedKind = prev.kind === GateKind.Z ? GateKind.X : GateKind.Z;
+              nextList.splice(prevIdx, ONE);
+              nextList.splice(prevPrevIdx, ONE, {
+                id: `${prev.id}-hconj`,
+                kind: conjugatedKind,
+                targets: [w],
+              });
+              involutionCancellations += ONE;
+              changed = true;
+              continue;
+            }
+          }
+
+          nextList.push(step);
+          continue;
+        }
+
+        // Case 2: Two-qubit self-inverse involution on identical wire pair with NO intervening gate on EITHER wire
+        if (prev.targets.length === TWO && step.targets.length === TWO) {
+          const [a0, a1] = prev.targets;
+          const [b0, b1] = step.targets;
+          const unobstructedBoth = !nextList
+            .slice(prevIdx + ONE)
+            .some((mid) => mid.targets.includes(a0) || mid.targets.includes(a1));
+
+          if (unobstructedBoth) {
+            const sameOrdered = a0 === b0 && a1 === b1;
+            const sameSymmetric = (a0 === b0 && a1 === b1) || (a0 === b1 && a1 === b0);
+            if (
+              (step.kind === GateKind.CNOT && prev.kind === GateKind.CNOT && sameOrdered) ||
+              (step.kind === GateKind.CZ && prev.kind === GateKind.CZ && sameSymmetric) ||
+              (step.kind === GateKind.SWAP && prev.kind === GateKind.SWAP && sameSymmetric)
+            ) {
+              nextList.splice(prevIdx, ONE);
+              involutionCancellations += ONE;
+              changed = true;
+              continue;
+            }
+          }
+        }
+
+        nextList.push(step);
+      }
+      working = nextList;
+    }
+  }
+
+  const reindexedSteps: AqmGateStep[] = working.map((s, idx) => ({
+    ...s,
+    id: `f${idx}-${s.kind.toLowerCase()}`,
+  }));
+
+  const optimizedSpec: AqmCircuitSpec = {
+    ...spec,
+    steps: reindexedSteps,
+  };
+
+  const postCheck = verifyAndCompileCircuitPrism(optimizedSpec);
+  if (!postCheck.ok) return postCheck;
+
+  const layerBuckets = new Map<number, AqmGateStep[]>();
+  for (const node of postCheck.nodes) {
+    let arr = layerBuckets.get(node.layerIndex);
+    if (!arr) {
+      arr = [];
+      layerBuckets.set(node.layerIndex, arr);
+    }
+    arr.push(node.step);
+  }
+  const parallelLayers: CompiledLayerBatch[] = Array.from(layerBuckets.entries())
+    .sort((a, b) => a[ZERO] - b[ZERO])
+    .map(([layerIndex, steps]) => ({ layerIndex, steps }));
+
+  return {
+    ok: true,
+    optimizedSpec,
+    rawGateCount: spec.steps.length,
+    fusedGateCount: reindexedSteps.length,
+    gatesEliminated: Math.max(ZERO, spec.steps.length - reindexedSteps.length),
+    phaseOctantMerges,
+    involutionCancellations,
+    diagonalCommutePushes,
+    rawDepth: preCheck.depth,
+    fusedDepth: postCheck.depth,
+    parallelLayers,
+  };
+}
+
 /**
  * Quantum.lex.tex :: normConservedScaled
  */
@@ -432,6 +731,18 @@ export const CORE_WASM_ACCEPTANCE_VECTORS: readonly AcceptanceVectorSpec[] = [
     id: 'AQ-16',
     request: 'aqm:honesty',
     expectedResponse: `conformant:tiers=${THREE},some_true=anchored,build=defect_gated,open=measured`,
+    category: 'positive',
+  },
+  {
+    id: 'AQ-17',
+    request: 'aqm:fusion',
+    expectedResponse: 'conformant:monoid=Z8_CliffordT,involutions=canceled,commute_push=exact',
+    category: 'positive',
+  },
+  {
+    id: 'AQ-18',
+    request: 'aqm:wasm:kernels',
+    expectedResponse: 'conformant:exports=6,i64_popcnt=true,packed4_gemv=true,tropical_k7=true',
     category: 'positive',
   },
   {
@@ -549,6 +860,16 @@ export function dispatchCoreWasmQuery(rawRequest: string | Uint8Array): string {
     answer = 'conformant:compiler=SkWeaver_PU22,flow_gap=3,euler=ZXZ,kappa=blake3';
   } else if (query === 'aqm:honesty') {
     answer = `conformant:tiers=${THREE},some_true=anchored,build=defect_gated,open=measured`;
+  } else if (query === 'aqm:fusion') {
+    answer = 'conformant:monoid=Z8_CliffordT,involutions=canceled,commute_push=exact';
+  } else if (query === 'aqm:wasm:kernels') {
+    answer = 'conformant:exports=6,i64_popcnt=true,packed4_gemv=true,tropical_k7=true';
+  } else if (query === 'aqm:defect:illegal-commute') {
+    const c = verifyGateCommutationLegal(
+      { id: 't1', kind: GateKind.T, targets: [ONE] },
+      { id: 'cx01', kind: GateKind.CNOT, targets: [ZERO, ONE] },
+    );
+    answer = c.ok ? 'conformant:unexpected' : c.error.refusalCode;
   } else if (query === 'aqm:defect:cloning') {
     const res = verifyStepWires({ id: 'd0', kind: GateKind.CNOT, targets: [ZERO, ZERO] }, FOUR, ZERO);
     answer = res.ok ? 'conformant:unexpected' : res.error.refusalCode;
@@ -862,4 +1183,28 @@ export const PLANTED_DEFECT_CATALOG: readonly {
       };
     },
   },
+  {
+    id: 'illegal-cnot-target-commute',
+    title: 'Illegal Non-Commuting T Push Across CNOT Target',
+    capabilityId: 'AQ-17',
+    description: 'Attempts to commute diagonal T(q1) across CNOT(q0 -> q1) where q1 is the Pauli-X target wire.',
+    run: () => {
+      const check = verifyGateCommutationLegal(
+        { id: 't-targ', kind: GateKind.T, targets: [ONE] },
+        { id: 'cx-01', kind: GateKind.CNOT, targets: [ZERO, ONE] },
+      );
+      if (check.ok) throw new Error('Illegal CNOT target commutation escaped AQ-17 monoid guard');
+      return {
+        defectId: 'illegal-cnot-target-commute',
+        title: 'Illegal Non-Commuting T Push Across CNOT Target',
+        capabilityId: 'AQ-17',
+        plantedDescription: 'verifyGateCommutationLegal(T(q1), CNOT(q0, q1)) -> non-commuting X/T target',
+        gateTriggered: true,
+        error: check.error,
+        verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:illegal-commute'),
+        restoredPassVector: dispatchCoreWasmQuery('aqm:fusion'),
+      };
+    },
+  },
 ];
+

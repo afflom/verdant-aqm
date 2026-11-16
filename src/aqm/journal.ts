@@ -22,7 +22,11 @@ import {
   inspectExactMpsState,
   stepExactMpsGate,
 } from './mps';
-import { verifyAndCompileCircuitPrism } from './prismKernel';
+import {
+  PrismFusionReport,
+  optimizeCircuitPrismMonoid,
+  verifyAndCompileCircuitPrism,
+} from './prismKernel';
 import { bytesToHex, sha256Bytes, sha256Hex } from './sha256';
 import {
   SymplecticTableau,
@@ -101,6 +105,7 @@ export interface ExecutedRollbackSession {
   readonly dagDepth: number;
   readonly frames: readonly AqmFrameSnapshot[];
   readonly journal: readonly JournalEntry[];
+  readonly fusionReport: PrismFusionReport;
 }
 
 /**
@@ -261,7 +266,11 @@ export function executeCircuitRollbackSession(
     for (let i = ZERO; i < maxSteps; i += ONE) {
       const step = spec.steps[i];
       const draw = deterministicBornDraw(spec.seed, i, step.targets[ZERO]);
-      const res = stepCyclotomicGate(curState, step, draw);
+      const fullInspectStep = !lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO;
+      const res = stepCyclotomicGate(curState, step, draw, {
+        skipBondRanks: !fullInspectStep,
+        skipTelemetryAppend: !fullInspectStep,
+      });
       curState = res.nextState;
 
       const prevDigest = chainTip;
@@ -398,6 +407,11 @@ export function executeCircuitRollbackSession(
     }
   }
 
+  const fusion = optimizeCircuitPrismMonoid(spec);
+  if (!fusion.ok) {
+    return fusion;
+  }
+
   return {
     ok: true,
     spec,
@@ -405,6 +419,7 @@ export function executeCircuitRollbackSession(
     dagDepth: compiled.depth,
     frames,
     journal,
+    fusionReport: fusion,
   };
 }
 

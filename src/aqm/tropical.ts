@@ -6,6 +6,7 @@
  *  3. Backward `(max, +)` causal lightcone extraction across compiled circuit DAGs.
  */
 
+import { runWasmTropicalClosure } from './holoGuest';
 import { ONE, ZERO, extractSyndromesHelper } from './tropicalHelpers';
 import {
   PauliFault,
@@ -42,14 +43,27 @@ export function tropicalMinPlusGemm(a: Int32Array, b: Int32Array, n: number): In
 
 /**
  * Computes all-pairs shortest distances and next-hop predecessor witness via Tropical (min, +) closure (`k7`).
+ * Executes directly inside the zero-import `wasm32` `VerdantAqm.holo` v4 guest (`wasm_tropical_minplus_closure`)
+ * for dual-graph node counts n <= 128 (covering rotated surface codes up to d = 15, 225 data qubits).
  */
 export function tropicalMinPlusClosureWithPaths(
   weights: Int32Array,
   nextHopInit: Int32Array,
   n: number,
-): { dist: Int32Array; nextHop: Int32Array } {
+): { dist: Int32Array; nextHop: Int32Array; wasmAccelerated: boolean; wasmRelaxations: number } {
+  if (n > ZERO && n <= 128) {
+    const wasmRes = runWasmTropicalClosure(weights, nextHopInit, n);
+    return {
+      dist: wasmRes.dist,
+      nextHop: wasmRes.nextHop,
+      wasmAccelerated: true,
+      wasmRelaxations: wasmRes.relaxations,
+    };
+  }
+
   const dist = new Int32Array(weights);
   const nextHop = new Int32Array(nextHopInit);
+  let relaxations = ZERO;
 
   for (let k = ZERO; k < n; k += ONE) {
     for (let i = ZERO; i < n; i += ONE) {
@@ -62,11 +76,12 @@ export function tropicalMinPlusClosureWithPaths(
         if (cand < dist[i * n + j]) {
           dist[i * n + j] = cand;
           nextHop[i * n + j] = nextHop[i * n + k];
+          relaxations += ONE;
         }
       }
     }
   }
-  return { dist, nextHop };
+  return { dist, nextHop, wasmAccelerated: false, wasmRelaxations: relaxations };
 }
 
 export interface TropicalSyndromeDecodeResult {
@@ -82,12 +97,14 @@ export interface TropicalSyndromeDecodeResult {
   readonly totalWeight: number;
   readonly postDecodeExcitedIds: string[];
   readonly logicalPreserved: boolean;
+  readonly wasmAccelerated: boolean;
+  readonly wasmRelaxations: number;
 }
 
 /**
  * Decodes X-faults (from Z-plaquette syndromes) and Z-faults (from X-plaquette syndromes)
- * on any odd-distance `[[d^2, 1, d]]` rotated surface code (`d = 3, 5, 7, 9+`)
- * using Tropical (min, +) dual-lattice shortest paths & minimum-weight pairing.
+ * on any odd-distance `[[d^2, 1, d]]` rotated surface code (`d = 3, 5, 7, 9, 11+`)
+ * using Wasm-accelerated Tropical (min, +) dual-lattice shortest paths & minimum-weight pairing.
  */
 export function decodeSurfaceCodeTropical(
   currentFaults: readonly PauliFault[],
@@ -150,7 +167,8 @@ export function decodeSurfaceCodeTropical(
       }
     }
 
-    const { dist, nextHop } = tropicalMinPlusClosureWithPaths(weights, nextHopInit, nodeCount);
+    const closure = tropicalMinPlusClosureWithPaths(weights, nextHopInit, nodeCount);
+    const { dist, nextHop } = closure;
 
     const defects: number[] = [];
     for (let i = ZERO; i < plaqs.length; i += ONE) {
@@ -185,7 +203,13 @@ export function decodeSurfaceCodeTropical(
       }
     }
 
-    return { flippedQubits, edgesUsed, cost: bestPairings.cost };
+    return {
+      flippedQubits,
+      edgesUsed,
+      cost: bestPairings.cost,
+      wasmAccelerated: closure.wasmAccelerated,
+      wasmRelaxations: closure.wasmRelaxations,
+    };
   };
 
   const xDecode = decodeSector(zPlaqs, syn.zSyndromes, 'X-correction');
@@ -225,6 +249,8 @@ export function decodeSurfaceCodeTropical(
     postDecodeExcitedIds: postSyn.excitedIds,
     logicalPreserved:
       postSyn.excitedIds.length === ZERO && !postSyn.logicalXFlipped && !postSyn.logicalZFlipped,
+    wasmAccelerated: xDecode.wasmAccelerated && zDecode.wasmAccelerated,
+    wasmRelaxations: xDecode.wasmRelaxations + zDecode.wasmRelaxations,
   };
 }
 

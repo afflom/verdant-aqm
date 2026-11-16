@@ -13,7 +13,12 @@ import gherkinSuiteSource from '@/features/suites/aqm.feature?raw';
 import advantageFeatureSource from '@/features/targets/advantage.feature?raw';
 import modelIdsSource from '@/model/ids.toml?raw';
 import modelLedgerSource from '@/model/ledger.toml?raw';
-import { buildVerdantAqmHoloArchive } from '../aqm/holoGuest';
+import {
+  buildVerdantAqmHoloArchive,
+  runWasmPacked4Gemv,
+  runWasmSymplecticCommute,
+  runWasmTropicalClosure,
+} from '../aqm/holoGuest';
 import { AqmFrameSnapshot } from '../aqm/journal';
 import {
   CORE_WASM_ACCEPTANCE_VECTORS,
@@ -177,7 +182,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
   };
 
   const handleDownloadHoloArchive = () => {
-    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.2.0:8-facets:AQ-01..AQ-16');
+    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.2.0:8-facets:AQ-01..AQ-18');
     const copyBuf = new ArrayBuffer(built.archiveBytes.byteLength);
     new Uint8Array(copyBuf).set(built.archiveBytes);
     const blob = new Blob([copyBuf], { type: 'application/octet-stream' });
@@ -193,6 +198,31 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
       `Exported VerdantAqm.holo (${built.archiveBytes.byteLength} B · blake3:${built.archiveFingerprint.slice(0, 16)}…)`,
     );
   };
+
+  const wasmKernelParity = React.useMemo(() => {
+    const x1 = new BigUint64Array([0b1011n, 0n]);
+    const z1 = new BigUint64Array([0b0110n, 0n]);
+    const x2 = new BigUint64Array([0b1100n, 0n]);
+    const z2 = new BigUint64Array([0b0011n, 0n]);
+    const commOk = runWasmSymplecticCommute(x1, z1, x2, z2) === false;
+
+    const gemv = runWasmPacked4Gemv(
+      new Int32Array([12, 1, 0, -6]),
+      new Uint8Array([(8 << 4) | 15, (0 << 4) | 7]),
+      new Int32Array([-8, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12]),
+      1,
+      2,
+    );
+    const gemvOk = gemv.out[0] === 193n;
+
+    const inf = 1_000_000;
+    const w = new Int32Array([0, 1, inf, 1, 0, 1, inf, 1, 0]);
+    const hop = new Int32Array([0, 1, -1, 0, 1, 2, -1, 1, 2]);
+    const trop = runWasmTropicalClosure(w, hop, 3);
+    const tropOk = trop.dist[2] === 2 && trop.nextHop[2] === 1;
+
+    return { commOk, gemvOut: gemv.out[0], gemvOk, tropDist02: trop.dist[2], tropOk };
+  }, []);
 
   const queryByteLen = new TextEncoder().encode(queryInput).byteLength;
   const selectedArtifact =
@@ -363,8 +393,8 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                   <div className="text-slate-500">Compiled wasm32 Guest</div>
-                  <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
-                    {workerIdentity.wasmBytesLength} B · [{workerIdentity.exportedSymbols.join(', ')}]
+                  <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {workerIdentity.wasmBytesLength} B · {workerIdentity.exportedSymbols.length} exports
                   </div>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
@@ -381,6 +411,17 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                 </div>
               </div>
             )}
+
+            <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 border-t border-slate-200 dark:border-slate-800/80">
+              <span>
+                Zero-Import Exports (AQ-18): memory · holo_alloc · holo_run · wasm_symplectic_commute · wasm_coded_packed4_gemv · wasm_tropical_minplus_closure
+              </span>
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                {wasmKernelParity.commOk && wasmKernelParity.gemvOk && wasmKernelParity.tropOk
+                  ? `● Live Wasm Kernel Parity Verified (GEMV=${String(wasmKernelParity.gemvOut)}, d₀₂=${wasmKernelParity.tropDist02})`
+                  : '▲ Kernel Parity Mismatch'}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -446,11 +487,11 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               </div>
             </form>
 
-            {/* Right: All 8 Planted Defect Gates */}
+            {/* Right: All 9 Planted Defect Gates */}
             <div className="lg:col-span-6 p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Planted Defect Gate Verification (R5 Negative Refusals · 8 Gates)
+                  Planted Defect Gate Verification (R5 Negative Refusals · {PLANTED_DEFECT_CATALOG.length} Gates)
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                   Every gate proves both refusal on planted violation and clean restoration on fix.
