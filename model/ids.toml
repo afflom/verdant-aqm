@@ -1,4 +1,4 @@
-# Verdant AQM Capability Register & Typed Failure Ledger (R1, R3, R5 — AQ-01..AQ-16)
+# Verdant AQM Capability Register & Typed Failure Ledger (R1, R3, R5 — AQ-01..AQ-23)
 
 [[capabilities]]
 id = "AQ-01"
@@ -168,4 +168,19 @@ statement = "Authoritative external Qiskit/qiskit BackendV2 & Primitives V2 vali
 failure = "DevRelPublishOutcome::RefuseMisstatedOrUnverified"
 negative = "aqm:defect:unverified-notebook"
 
+[[capabilities]]
+id = "AQ-22"
+level = "build"
+suite = "aqm"
+statement = "Pure UORC post-boot wire (VE-36) seals #uorc= URL snapshots, OPFS .uorc cache, progressive LOD0..LOD4 frames, Stitch 2-of-3 XOR shards, stride-8 rollback checkpoints, CDMX zero-decode CodedMatrix bundles, and Qiskit Result archives with 32-byte SHA-256 digests across Rust, TypeScript, and Python while auditing the 3 modeled boundary exemptions."
+failure = "UorcWireError::UnsealedPostBootPayload"
+negative = "aqm:defect:unsealed-wire"
+
+[[capabilities]]
+id = "AQ-23"
+level = "build"
+suite = "aqm"
+statement = "Permanent zero-constants parametric ratchet (FI-08, spec = prism/parametric-ratchet/1) enforces all 6 zero ceilings (0 ontology literals > 1, 0 ontology String fields, 0 Classical.choice, 0 ungrounded .lex.tex modules, 0 domain .lex.tex magic literals, 0 Rust engine magic literals) across app/src and crates/verdant-aqm/src."
+failure = "ParametricRatchetError::MagicLiteralDetected"
+negative = "aqm:defect:ratchet-magic"
 

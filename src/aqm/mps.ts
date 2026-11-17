@@ -859,4 +859,514 @@ export function inspectExactMpsState(state: ExactMpsState): {
   };
 }
 
+interface NormalizedFloatSite {
+  readonly chiL: number;
+  readonly chiR: number;
+  readonly m0Re: Float64Array;
+  readonly m0Im: Float64Array;
+  readonly m1Re: Float64Array;
+  readonly m1Im: Float64Array;
+}
+
+function toNormalizedFloatSites(sites: readonly MpsSiteTensor[]): NormalizedFloatSite[] {
+  return sites.map((s) => {
+    const len = s.chiL * s.chiR;
+    const m0Re = new Float64Array(len);
+    const m0Im = new Float64Array(len);
+    const m1Re = new Float64Array(len);
+    const m1Im = new Float64Array(len);
+    let maxBit = 0;
+    for (let i = ZERO; i < len; i += ONE) {
+      for (const z of [s.m0[i], s.m1[i]]) {
+        for (const v of [z.a, z.b, z.c, z.d]) {
+          if (v !== ZERO_BIG) {
+            const absV = v < ZERO_BIG ? -v : v;
+            const bLen = absV.toString(2).length;
+            if (bLen > maxBit) maxBit = bLen;
+          }
+        }
+      }
+    }
+    const shift = maxBit > 96 ? BigInt(maxBit - 96) : ZERO_BIG;
+    let maxMag = 0;
+    for (let i = ZERO; i < len; i += ONE) {
+      const z0 =
+        shift > ZERO_BIG
+          ? { a: s.m0[i].a >> shift, b: s.m0[i].b >> shift, c: s.m0[i].c >> shift, d: s.m0[i].d >> shift }
+          : s.m0[i];
+      const z1 =
+        shift > ZERO_BIG
+          ? { a: s.m1[i].a >> shift, b: s.m1[i].b >> shift, c: s.m1[i].c >> shift, d: s.m1[i].d >> shift }
+          : s.m1[i];
+      const c0 = z8ToComplexFloat(z0, 1);
+      const c1 = z8ToComplexFloat(z1, 1);
+      m0Re[i] = c0.re;
+      m0Im[i] = c0.im;
+      m1Re[i] = c1.re;
+      m1Im[i] = c1.im;
+      maxMag = Math.max(maxMag, Math.hypot(c0.re, c0.im), Math.hypot(c1.re, c1.im));
+    }
+    const scale = maxMag > 0 ? maxMag : 1;
+    for (let i = ZERO; i < len; i += ONE) {
+      m0Re[i] /= scale;
+      m0Im[i] /= scale;
+      m1Re[i] /= scale;
+      m1Im[i] /= scale;
+    }
+    return { chiL: s.chiL, chiR: s.chiR, m0Re, m0Im, m1Re, m1Im };
+  });
+}
+
+/**
+ * Batch unitary execution on `ExactMps` (`Q(zeta_8)` Galois-RREF tensor-train).
+ */
+export function executeExactMpsBatch(
+  qubitCount: number,
+  steps: readonly AqmGateStep[],
+  maxBondCap = 64,
+): ExactMpsState {
+  let state = createInitialExactMps(qubitCount, maxBondCap);
+  for (const step of steps) {
+    state = stepExactMpsGate(state, step, 0.5).nextState;
+  }
+  return state;
+}
+
+/**
+ * Exact `O(n * chi^3)` transfer-matrix contraction of `<psi | P | psi> / <psi | psi>`
+ * for a little-endian Qiskit Pauli string `P` (right-most char acts on `q[0]`).
+ * Propagates numerator and denominator transfer matrices with identical per-site positive trace rescaling,
+ * preventing IEEE-754 underflow/overflow at arbitrary register widths (`64 .. 4,096+` qubits).
+ */
+export function computeExactMpsPauliExpectation(
+  state: ExactMpsState,
+  pauliStr: string,
+): number {
+  const n = state.qubitCount;
+  const clean = pauliStr.trim().toUpperCase();
+  if (clean.length !== n) {
+    throw new Error(
+      `QiskitBackendError::MalformedPauliObservableArity: Pauli string '${pauliStr}' length ${clean.length} != num_qubits ${n}.`,
+    );
+  }
+  const fSites = toNormalizedFloatSites(state.sites);
+
+  let normRe: Float64Array = new Float64Array([1]);
+  let normIm: Float64Array = new Float64Array([0]);
+  let opRe: Float64Array = new Float64Array([1]);
+  let opIm: Float64Array = new Float64Array([0]);
+
+  const propagateSite = (
+    inRe: Float64Array,
+    inIm: Float64Array,
+    bra0Re: Float64Array,
+    bra0Im: Float64Array,
+    bra1Re: Float64Array,
+    bra1Im: Float64Array,
+    ket0Re: Float64Array,
+    ket0Im: Float64Array,
+    ket1Re: Float64Array,
+    ket1Im: Float64Array,
+    dL: number,
+    dR: number,
+  ): { outRe: Float64Array; outIm: Float64Array } => {
+    const outRe = new Float64Array(dR * dR);
+    const outIm = new Float64Array(dR * dR);
+    const branches: ReadonlyArray<readonly [Float64Array, Float64Array, Float64Array, Float64Array]> = [
+      [bra0Re, bra0Im, ket0Re, ket0Im],
+      [bra1Re, bra1Im, ket1Re, ket1Im],
+    ];
+    for (const [bRe, bIm, kRe, kIm] of branches) {
+      // tmp[a, g] = sum_b in[a, b] * ket[b, g]
+      const tmpRe = new Float64Array(dL * dR);
+      const tmpIm = new Float64Array(dL * dR);
+      for (let a = ZERO; a < dL; a += ONE) {
+        for (let b = ZERO; b < dL; b += ONE) {
+          const er = inRe[a * dL + b];
+          const ei = inIm[a * dL + b];
+          if (er === 0 && ei === 0) continue;
+          for (let g = ZERO; g < dR; g += ONE) {
+            const kr = kRe[b * dR + g];
+            const ki = kIm[b * dR + g];
+            tmpRe[a * dR + g] += er * kr - ei * ki;
+            tmpIm[a * dR + g] += er * ki + ei * kr;
+          }
+        }
+      }
+      // out[g1, g2] += sum_a conj(bra[a, g1]) * tmp[a, g2]
+      for (let a = ZERO; a < dL; a += ONE) {
+        for (let g1 = ZERO; g1 < dR; g1 += ONE) {
+          const cr = bRe[a * dR + g1];
+          const ci = -bIm[a * dR + g1];
+          if (cr === 0 && ci === 0) continue;
+          for (let g2 = ZERO; g2 < dR; g2 += ONE) {
+            const tr = tmpRe[a * dR + g2];
+            const ti = tmpIm[a * dR + g2];
+            outRe[g1 * dR + g2] += cr * tr - ci * ti;
+            outIm[g1 * dR + g2] += cr * ti + ci * tr;
+          }
+        }
+      }
+    }
+    return { outRe, outIm };
+  };
+
+  for (let q = ZERO; q < n; q += ONE) {
+    const fs = fSites[q];
+    const dL = fs.chiL;
+    const dR = fs.chiR;
+    const ch = clean[n - ONE - q];
+
+    let k0Re = fs.m0Re;
+    let k0Im = fs.m0Im;
+    let k1Re = fs.m1Re;
+    let k1Im = fs.m1Im;
+
+    if (ch === 'X') {
+      k0Re = fs.m1Re;
+      k0Im = fs.m1Im;
+      k1Re = fs.m0Re;
+      k1Im = fs.m0Im;
+    } else if (ch === 'Z') {
+      k1Re = fs.m1Re.map((v) => -v);
+      k1Im = fs.m1Im.map((v) => -v);
+    } else if (ch === 'Y') {
+      // Y|0> = i|1>, Y|1> = -i|0> => (P|psi>)_0 = -i * m1, (P|psi>)_1 = +i * m0
+      k0Re = fs.m1Im.slice();
+      k0Im = fs.m1Re.map((v) => -v);
+      k1Re = fs.m0Im.map((v) => -v);
+      k1Im = fs.m0Re.slice();
+    } else if (ch !== 'I') {
+      throw new Error(`Unsupported Pauli character '${ch}' in '${pauliStr}'.`);
+    }
+
+    const nextNorm = propagateSite(
+      normRe,
+      normIm,
+      fs.m0Re,
+      fs.m0Im,
+      fs.m1Re,
+      fs.m1Im,
+      fs.m0Re,
+      fs.m0Im,
+      fs.m1Re,
+      fs.m1Im,
+      dL,
+      dR,
+    );
+    const nextOp = propagateSite(
+      opRe,
+      opIm,
+      fs.m0Re,
+      fs.m0Im,
+      fs.m1Re,
+      fs.m1Im,
+      k0Re,
+      k0Im,
+      k1Re,
+      k1Im,
+      dL,
+      dR,
+    );
+
+    let trNorm = 0;
+    for (let g = ZERO; g < dR; g += ONE) trNorm += nextNorm.outRe[g * dR + g];
+    const scale = trNorm > 1e-300 ? trNorm : 1;
+    for (let i = ZERO; i < nextNorm.outRe.length; i += ONE) {
+      nextNorm.outRe[i] /= scale;
+      nextNorm.outIm[i] /= scale;
+      nextOp.outRe[i] /= scale;
+      nextOp.outIm[i] /= scale;
+    }
+    normRe = nextNorm.outRe;
+    normIm = nextNorm.outIm;
+    opRe = nextOp.outRe;
+    opIm = nextOp.outIm;
+  }
+
+  const denom = Math.max(1e-30, normRe[ZERO]);
+  return opRe[ZERO] / denom;
+}
+
+/**
+ * Exact `O(n * chi^2)` per-shot sequential chain-rule Born sampler over `ExactMpsState`.
+ * Samples exact computational-basis measurements on dense-support `2^n` states (e.g. 64q..256q `H+T+CZ` circuits)
+ * without enumerating `2^n` basis kets! Also computes exact analytical marginal probabilities when `|uniqueMeasuredWires| <= 10`.
+ */
+export function sampleExactMpsBornChainRule(
+  state: ExactMpsState,
+  uniqueMeasuredWires: readonly number[],
+  shots: number,
+  rng: () => number,
+): {
+  shotOutcomes: ReadonlyArray<ReadonlyMap<number, 0 | 1>>;
+  analyticalMarginals?: ReadonlyMap<number, number>;
+  maxChi: number;
+} {
+  const n = state.qubitCount;
+  const fSites = toNormalizedFloatSites(state.sites);
+  const bonds = getMpsBondDimensions(state);
+  const maxChi = bonds.length > ZERO ? Math.max(...bonds) : ONE;
+
+  // Precompute right norm environments R[q] (shape chiL x chiL at boundary q)
+  const rightRe: Float64Array[] = new Array(n + ONE);
+  const rightIm: Float64Array[] = new Array(n + ONE);
+  rightRe[n] = new Float64Array([1]);
+  rightIm[n] = new Float64Array([0]);
+
+  for (let q = n - ONE; q >= ZERO; q -= ONE) {
+    const fs = fSites[q];
+    const dL = fs.chiL;
+    const dR = fs.chiR;
+    const nextRe = new Float64Array(dL * dL);
+    const nextIm = new Float64Array(dL * dL);
+
+    for (const [mRe, mIm] of [
+      [fs.m0Re, fs.m0Im],
+      [fs.m1Re, fs.m1Im],
+    ] as const) {
+      const tmpRe = new Float64Array(dL * dR);
+      const tmpIm = new Float64Array(dL * dR);
+      for (let a = ZERO; a < dL; a += ONE) {
+        for (let b = ZERO; b < dR; b += ONE) {
+          const ar = mRe[a * dR + b];
+          const ai = mIm[a * dR + b];
+          if (ar === 0 && ai === 0) continue;
+          for (let g = ZERO; g < dR; g += ONE) {
+            const rr = rightRe[q + ONE][b * dR + g];
+            const ri = rightIm[q + ONE][b * dR + g];
+            tmpRe[a * dR + g] += ar * rr - ai * ri;
+            tmpIm[a * dR + g] += ar * ri + ai * rr;
+          }
+        }
+      }
+      for (let a1 = ZERO; a1 < dL; a1 += ONE) {
+        for (let g = ZERO; g < dR; g += ONE) {
+          const tr = tmpRe[a1 * dR + g];
+          const ti = tmpIm[a1 * dR + g];
+          if (tr === 0 && ti === 0) continue;
+          for (let a2 = ZERO; a2 < dL; a2 += ONE) {
+            const cr = mRe[a2 * dR + g];
+            const ci = -mIm[a2 * dR + g];
+            nextRe[a1 * dL + a2] += tr * cr - ti * ci;
+            nextIm[a1 * dL + a2] += tr * ci + ti * cr;
+          }
+        }
+      }
+    }
+
+    let tr = 0;
+    for (let a = ZERO; a < dL; a += ONE) tr += Math.abs(nextRe[a * dL + a]);
+    if (tr > 0) {
+      for (let i = ZERO; i < nextRe.length; i += ONE) {
+        nextRe[i] /= tr;
+        nextIm[i] /= tr;
+      }
+    }
+    rightRe[q] = nextRe;
+    rightIm[q] = nextIm;
+  }
+
+  const measuredSet = new Set<number>(uniqueMeasuredWires);
+  const maxMeasuredWire =
+    uniqueMeasuredWires.length > ZERO ? Math.max(...uniqueMeasuredWires) : -ONE;
+
+  // Exact analytical marginal probabilities when |uniqueMeasuredWires| <= 10 (<= 1,024 marginal branches)
+  let analyticalMarginals: Map<number, number> | undefined;
+  if (uniqueMeasuredWires.length > ZERO && uniqueMeasuredWires.length <= 10) {
+    const wireToBitPos = new Map<number, number>();
+    uniqueMeasuredWires.forEach((w, idx) => wireToBitPos.set(w, idx));
+
+    let branches: Array<{ mask: number; envRe: Float64Array; envIm: Float64Array }> = [
+      { mask: ZERO, envRe: new Float64Array([1]), envIm: new Float64Array([0]) },
+    ];
+
+    for (let q = ZERO; q <= maxMeasuredWire; q += ONE) {
+      const fs = fSites[q];
+      const dL = fs.chiL;
+      const dR = fs.chiR;
+      const bitPos = wireToBitPos.get(q);
+
+      const stepSingle = (
+        inRe: Float64Array,
+        inIm: Float64Array,
+        mRe: Float64Array,
+        mIm: Float64Array,
+      ): { outRe: Float64Array; outIm: Float64Array } => {
+        const outRe = new Float64Array(dR * dR);
+        const outIm = new Float64Array(dR * dR);
+        const tmpRe = new Float64Array(dL * dR);
+        const tmpIm = new Float64Array(dL * dR);
+        for (let a = ZERO; a < dL; a += ONE) {
+          for (let b = ZERO; b < dL; b += ONE) {
+            const er = inRe[a * dL + b];
+            const ei = inIm[a * dL + b];
+            if (er === 0 && ei === 0) continue;
+            for (let g = ZERO; g < dR; g += ONE) {
+              const mr = mRe[b * dR + g];
+              const mi = mIm[b * dR + g];
+              tmpRe[a * dR + g] += er * mr - ei * mi;
+              tmpIm[a * dR + g] += er * mi + ei * mr;
+            }
+          }
+        }
+        for (let a = ZERO; a < dL; a += ONE) {
+          for (let g1 = ZERO; g1 < dR; g1 += ONE) {
+            const cr = mRe[a * dR + g1];
+            const ci = -mIm[a * dR + g1];
+            if (cr === 0 && ci === 0) continue;
+            for (let g2 = ZERO; g2 < dR; g2 += ONE) {
+              const tr = tmpRe[a * dR + g2];
+              const ti = tmpIm[a * dR + g2];
+              outRe[g1 * dR + g2] += cr * tr - ci * ti;
+              outIm[g1 * dR + g2] += cr * ti + ci * tr;
+            }
+          }
+        }
+        return { outRe, outIm };
+      };
+
+      const nextBranches: Array<{ mask: number; envRe: Float64Array; envIm: Float64Array }> = [];
+      for (const br of branches) {
+        const b0 = stepSingle(br.envRe, br.envIm, fs.m0Re, fs.m0Im);
+        const b1 = stepSingle(br.envRe, br.envIm, fs.m1Re, fs.m1Im);
+        if (bitPos !== undefined) {
+          nextBranches.push({ mask: br.mask, envRe: b0.outRe, envIm: b0.outIm });
+          nextBranches.push({ mask: br.mask | (ONE << bitPos), envRe: b1.outRe, envIm: b1.outIm });
+        } else {
+          for (let i = ZERO; i < b0.outRe.length; i += ONE) {
+            b0.outRe[i] += b1.outRe[i];
+            b0.outIm[i] += b1.outIm[i];
+          }
+          nextBranches.push({ mask: br.mask, envRe: b0.outRe, envIm: b0.outIm });
+        }
+      }
+
+      // Normalize across all branches jointly so relative branch probabilities stay exact!
+      let jointTraceSum = 0;
+      for (const br of nextBranches) {
+        for (let g = ZERO; g < dR; g += ONE) jointTraceSum += Math.max(0, br.envRe[g * dR + g]);
+      }
+      if (jointTraceSum > 0) {
+        for (const br of nextBranches) {
+          for (let i = ZERO; i < br.envRe.length; i += ONE) {
+            br.envRe[i] /= jointTraceSum;
+            br.envIm[i] /= jointTraceSum;
+          }
+        }
+      }
+      branches = nextBranches;
+    }
+
+    // Contract remaining right boundary R[maxMeasuredWire + 1]: Tr(L_branch * R)
+    const tailRRe = rightRe[maxMeasuredWire + ONE];
+    const tailRIm = rightIm[maxMeasuredWire + ONE];
+    const dTail = fSites[maxMeasuredWire].chiR;
+    const rawWeights: Array<{ mask: number; weight: number }> = [];
+    let weightSum = 0;
+    for (const br of branches) {
+      let w = 0;
+      for (let g1 = ZERO; g1 < dTail; g1 += ONE) {
+        for (let g2 = ZERO; g2 < dTail; g2 += ONE) {
+          const lr = br.envRe[g1 * dTail + g2];
+          const li = br.envIm[g1 * dTail + g2];
+          const rr = tailRRe[g2 * dTail + g1];
+          const ri = tailRIm[g2 * dTail + g1];
+          w += lr * rr - li * ri;
+        }
+      }
+      const posW = Math.max(0, w);
+      rawWeights.push({ mask: br.mask, weight: posW });
+      weightSum += posW;
+    }
+    analyticalMarginals = new Map<number, number>();
+    const invSum = 1 / Math.max(1e-30, weightSum);
+    for (const item of rawWeights) {
+      const p = item.weight * invSum;
+      if (p > 1e-16) analyticalMarginals.set(item.mask, p);
+    }
+  }
+
+  // Sequential O(n * chi^2) chain-rule shot sampling
+  const shotOutcomes: Array<Map<number, 0 | 1>> = new Array(shots);
+  for (let s = ZERO; s < shots; s += ONE) {
+    const outcomes = new Map<number, 0 | 1>();
+    let vecRe = new Float64Array([1]);
+    let vecIm = new Float64Array([0]);
+
+    for (let q = ZERO; q <= maxMeasuredWire; q += ONE) {
+      const fs = fSites[q];
+      const dL = fs.chiL;
+      const dR = fs.chiR;
+      const Rre = rightRe[q + ONE];
+      const Rim = rightIm[q + ONE];
+
+      const w0Re = new Float64Array(dR);
+      const w0Im = new Float64Array(dR);
+      const w1Re = new Float64Array(dR);
+      const w1Im = new Float64Array(dR);
+
+      for (let a = ZERO; a < dL; a += ONE) {
+        const vr = vecRe[a];
+        const vi = vecIm[a];
+        if (vr === 0 && vi === 0) continue;
+        for (let g = ZERO; g < dR; g += ONE) {
+          const m0r = fs.m0Re[a * dR + g];
+          const m0i = fs.m0Im[a * dR + g];
+          w0Re[g] += vr * m0r - vi * m0i;
+          w0Im[g] += vr * m0i + vi * m0r;
+
+          const m1r = fs.m1Re[a * dR + g];
+          const m1i = fs.m1Im[a * dR + g];
+          w1Re[g] += vr * m1r - vi * m1i;
+          w1Im[g] += vr * m1i + vi * m1r;
+        }
+      }
+
+      const quadWeight = (wr: Float64Array, wi: Float64Array): number => {
+        let acc = 0;
+        for (let g1 = ZERO; g1 < dR; g1 += ONE) {
+          const r1 = wr[g1];
+          const i1 = wi[g1];
+          if (r1 === 0 && i1 === 0) continue;
+          for (let g2 = ZERO; g2 < dR; g2 += ONE) {
+            const rr = Rre[g1 * dR + g2];
+            const ri = Rim[g1 * dR + g2];
+            // w * R * w^dagger = sum_{g1, g2} w[g1] * R[g1, g2] * conj(w[g2])
+            const tRe = r1 * rr - i1 * ri;
+            const tIm = r1 * ri + i1 * rr;
+            acc += tRe * wr[g2] + tIm * wi[g2];
+          }
+        }
+        return Math.max(0, acc);
+      };
+
+      const u0 = quadWeight(w0Re, w0Im);
+      const u1 = quadWeight(w1Re, w1Im);
+      const total = u0 + u1;
+      const p1 = total > 1e-30 ? Math.min(1, Math.max(0, u1 / total)) : 0.5;
+      const bit: 0 | 1 = rng() < p1 ? ONE : ZERO;
+      if (measuredSet.has(q)) outcomes.set(q, bit);
+
+      const chosenRe = bit === ONE ? w1Re : w0Re;
+      const chosenIm = bit === ONE ? w1Im : w0Im;
+      let normSq = 0;
+      for (let g = ZERO; g < dR; g += ONE) {
+        normSq += chosenRe[g] * chosenRe[g] + chosenIm[g] * chosenIm[g];
+      }
+      const invNorm = normSq > 1e-30 ? 1 / Math.sqrt(normSq) : 1;
+      for (let g = ZERO; g < dR; g += ONE) {
+        chosenRe[g] *= invNorm;
+        chosenIm[g] *= invNorm;
+      }
+      vecRe = chosenRe;
+      vecIm = chosenIm;
+    }
+
+    shotOutcomes[s] = outcomes;
+  }
+
+  return { shotOutcomes, analyticalMarginals, maxChi };
+}
+
 export { Q8_ONE };

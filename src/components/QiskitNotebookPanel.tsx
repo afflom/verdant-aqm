@@ -23,6 +23,7 @@ import rawVendorBackendV2 from '@/vendor/qiskit-oracle/test_backend_v2.py?raw';
 import rawVendorBasicSim from '@/vendor/qiskit-oracle/test_basic_simulator.py?raw';
 
 import {
+  ALL_CAPABILITY_IDS,
   CANONICAL_NOTEBOOK_SPECS,
   DIATAXIS_GUIDE_META,
   DevRelPersonaId,
@@ -320,7 +321,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
             </span>
             <span aria-hidden="true"> · </span>
             <span className="text-emerald-700 dark:text-emerald-400">
-              ● DevRel Gate: {devrelAudit.gateVerdict} ({devrelAudit.coveredCapabilities.length}/21 AQ IDs)
+              DevRel Gate: {devrelAudit.gateVerdict} ({devrelAudit.coveredCapabilities.length}/{ALL_CAPABILITY_IDS.length} AQ IDs)
             </span>
           </div>
         </div>
@@ -821,7 +822,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <div className="text-slate-500">Capability Coverage</div>
                 <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400">
-                  {devrelAudit.coveredCapabilities.length} / 21 (uncovered={devrelAudit.uncoveredCapabilities.length})
+                  {devrelAudit.coveredCapabilities.length} / {ALL_CAPABILITY_IDS.length} (uncovered={devrelAudit.uncoveredCapabilities.length})
                 </div>
               </div>
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">

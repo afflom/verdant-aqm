@@ -62,7 +62,7 @@ export const PRISM_DEVREL_PERSONAS: Readonly<Record<DevRelPersonaId, DevRelPerso
     diataxisKind: 'hub',
     propName: 'quill',
     accentHex: '#10b981',
-    summary: 'Maintains zero-gap capability coverage across AQ-01..AQ-21 and enforces publish gates.',
+    summary: 'Maintains zero-gap capability coverage across AQ-01..AQ-23 and enforces publish gates.',
   },
   Kai: {
     id: 'Kai',
@@ -115,7 +115,7 @@ export const DIATAXIS_GUIDE_META: readonly DiataxisGuideMeta[] = [
     kind: 'hub',
     persona: 'Wren',
     defaultSummary:
-      'Complete Diataxis map and AQ-01..AQ-21 capability coverage index for verdant-aqm and qiskit-verdant-aqm.',
+      'Complete Diataxis map and AQ-01..AQ-23 capability coverage index for verdant-aqm and qiskit-verdant-aqm.',
   },
   {
     id: 'tutorial-quickstart',
@@ -159,6 +159,7 @@ export const ALL_CAPABILITY_IDS: readonly CapabilityId[] = [
   'AQ-01', 'AQ-02', 'AQ-03', 'AQ-04', 'AQ-05', 'AQ-06', 'AQ-07',
   'AQ-08', 'AQ-09', 'AQ-10', 'AQ-11', 'AQ-12', 'AQ-13', 'AQ-14',
   'AQ-15', 'AQ-16', 'AQ-17', 'AQ-18', 'AQ-19', 'AQ-20', 'AQ-21',
+  'AQ-22', 'AQ-23',
 ];
 
 export interface NotebookCellSpec {
@@ -184,9 +185,9 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
     fileName: '01_quickstart_verdant_qiskit_backend.ipynb',
     title: '01 · Unbounded Qiskit BackendV2 Quickstart & Gate Fusion',
     persona: 'Kai',
-    capabilityIds: ['AQ-02', 'AQ-03', 'AQ-17', 'AQ-19'],
+    capabilityIds: ['AQ-02', 'AQ-03', 'AQ-17', 'AQ-19', 'AQ-22'],
     summary:
-      'Constructs Bell and 3-qubit GHZ+T circuits on VerdantAqmBackend, demonstrates Z_8 T^9 -> T gate fusion, and verifies multi-register little-endian counts.',
+      'Constructs Bell and 3-qubit GHZ+T circuits on VerdantAqmBackend, demonstrates Z_8 T^9 -> T gate fusion, seals Result payloads in pure UORC archives, and verifies multi-register little-endian counts.',
     cells: [
       {
         id: 'nb01-md1',
@@ -195,7 +196,7 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
         source: [
           '# 01 · Unbounded Qiskit `BackendV2` Quickstart (`qiskit-verdant-aqm`)',
           '',
-          'This notebook executes standard `QuantumCircuit` workloads through `VerdantAqmBackend` (`AQ-19`) with exact $\\mathbb{Z}[\\zeta_8]/\\sqrt{2}^k$ cyclotomic amplitudes (`AQ-03`) and $\\mathbb{Z}_8$ phase-monoid gate fusion (`AQ-17`).',
+          'This notebook executes standard `QuantumCircuit` workloads through `VerdantAqmBackend` (`AQ-19`) with exact $\\mathbb{Z}[\\zeta_8]/\\sqrt{2}^k$ cyclotomic amplitudes (`AQ-03`), $\\mathbb{Z}_8$ phase-monoid gate fusion (`AQ-17`), and SHA-256-sealed `UORC` post-boot wire framing (`AQ-22`).',
         ].join('\n'),
       },
       {
@@ -247,16 +248,16 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
     persona: 'Iris',
     capabilityIds: ['AQ-03', 'AQ-04', 'AQ-14', 'AQ-19'],
     summary:
-      'Runs a 4,096-qubit Clifford+T cat circuit in Sparse Z[zeta_8], a 2,048-qubit Clifford ring in StabilizerTableau, and exact 3-qubit CCX/CSWAP logic.',
+      'Runs a 4,096-qubit Clifford+T cat circuit in Sparse Z[zeta_8], a 2,048-qubit Clifford ring in StabilizerTableau, a 64-qubit 2^64-ket 1D Cluster+Octant chain in ExactMps, and exact 3-qubit CCX/CSWAP logic.',
     cells: [
       {
         id: 'nb02-md1',
         cellType: 'markdown',
         title: 'Bypassing Classical 2^n Qubit Ceilings',
         source: [
-          '# 02 · Megascale 4,096-Qubit Cat+$T$ & 2,048-Qubit Stabilizer Execution',
+          '# 02 · Megascale 4,096-Qubit Cat+$T$, 2,048-Qubit Stabilizer & 64-Qubit $2^{64}$-Ket `ExactMps`',
           '',
-          '`VerdantAqmBackend` sets `num_qubits = None` and routes structured circuits to `StabilizerTableau` (`AQ-04`) or `BigInt`-indexed `CyclotomicExact` (`AQ-03`) without dense $2^n$ state-vector allocation.',
+          '`VerdantAqmBackend` sets `num_qubits = None` and routes structured circuits to `StabilizerTableau` (`AQ-04`), `BigInt`-indexed `CyclotomicExact` (`AQ-03`), or $\\mathbb{Q}(\\zeta_8)$ `ExactMps` (`AQ-14`) without dense $2^n$ state-vector allocation.',
         ].join('\n'),
       },
       {
@@ -320,6 +321,27 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
           'result = backend.run(rev).result()',
         ].join('\n'),
       },
+      {
+        id: 'nb02-code4',
+        cellType: 'code',
+        title: '64-Qubit 2^64-Ket Non-Clifford 1D Cluster+Octant Chain (ExactMps)',
+        source: [
+          'from qiskit import QuantumCircuit',
+          'from qiskit_verdant_aqm import VerdantAqmBackend',
+          '',
+          'n = 64',
+          'mps = QuantumCircuit(n, 2, name="cluster_octant_64q_mps")',
+          'for q in range(n):',
+          '    mps.h(q)',
+          '    mps.t(q)',
+          'for q in range(n - 1):',
+          '    mps.cz(q, q + 1)',
+          'mps.measure([0, 63], [0, 1])',
+          '',
+          'backend = VerdantAqmBackend(shots=1024, seed_simulator=314)',
+          'result = backend.run(mps).result()',
+        ].join('\n'),
+      },
     ],
   },
   {
@@ -327,9 +349,9 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
     fileName: '03_primitives_v2_vqe_pauli_estimator_and_oracle.ipynb',
     title: '03 · Primitives V2: Exact VQE SparsePauliOp Estimator & Sampler',
     persona: 'Vera',
-    capabilityIds: ['AQ-16', 'AQ-20', 'AQ-21'],
+    capabilityIds: ['AQ-16', 'AQ-20', 'AQ-21', 'AQ-23'],
     summary:
-      'Evaluates analytical precision=0.0 Heisenberg & VQE SparsePauliOp expectations via VerdantAqmEstimatorV2 and shot-sampled BitArrays via VerdantAqmSamplerV2.',
+      'Evaluates analytical precision=0.0 Heisenberg & VQE SparsePauliOp expectations via VerdantAqmEstimatorV2 and shot-sampled BitArrays via VerdantAqmSamplerV2 under zero-constants parametric ratchet governance.',
     cells: [
       {
         id: 'nb03-md1',
@@ -338,7 +360,7 @@ export const CANONICAL_NOTEBOOK_SPECS: readonly CanonicalNotebookSpec[] = [
         source: [
           '# 03 · Qiskit Primitives V2 (`VerdantAqmEstimatorV2` & `VerdantAqmSamplerV2`)',
           '',
-          'Computes analytical `<psi | H | psi>` expectation values at `precision=0.0` (`AQ-20`) across continuous `ry`, `rz`, and `rzz` variational ansatze without finite-shot variance.',
+          'Computes analytical `<psi | H | psi>` expectation values at `precision=0.0` (`AQ-20`) across continuous `ry`, `rz`, and `rzz` variational ansatze without finite-shot variance, audited under `prism/parametric-ratchet/1` (`AQ-23`).',
         ].join('\n'),
       },
       {

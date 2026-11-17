@@ -43,12 +43,15 @@ import {
   HonestyVerdictErrorKind,
   MeasurementJournalErrorKind,
   ModeledAqmError,
+  ParametricRatchetErrorKind,
   PlantedDefectResult,
   QiskitBackendErrorKind,
   QuantumIsaErrorKind,
   StabilizerErrorKind,
   UnitaryInvariantErrorKind,
 } from './types';
+import { scanRustMagicLiterals } from './ratchet';
+import { verifyUorcTransportBoundary } from './uorc';
 
 export function gateArity(kind: GateKind): number {
   switch (kind) {
@@ -440,22 +443,36 @@ export function optimizeCircuitPrismMonoid(
       changed = false;
       pass += ONE;
 
-      // Pass A: Push single-qubit diagonal phases across immediately adjacent commuting 2-qubit gates (CZ, CNOT-control)
-      // when another gate on the same wire lies ahead!
+      // Pass A: O(G) precomputed next-touch-is-diagonal table per wire
+      const nextTouchIsDiag = new Uint8Array(spec.qubitCount);
+      const nextStepHasDiagAhead = new Uint8Array(working.length);
+      for (let i = working.length - ONE; i >= ZERO; i -= ONE) {
+        const st = working[i];
+        if (st.targets.length === ONE) {
+          const w = st.targets[ZERO];
+          nextStepHasDiagAhead[i] = nextTouchIsDiag[w];
+          nextTouchIsDiag[w] = diagonalOctants(st.kind) !== null ? ONE : ZERO;
+        } else {
+          for (const w of st.targets) {
+            nextTouchIsDiag[w] = ZERO;
+          }
+        }
+      }
+
       for (let i = ZERO; i + ONE < working.length; i += ONE) {
         const a = working[i];
         const b = working[i + ONE];
         if (diagonalOctants(a.kind) !== null && gateArity(b.kind) === TWO) {
           const w = a.targets[ZERO];
           if (b.targets.includes(w) && verifyGateCommutationLegal(a, b).ok) {
-            // Only push if there is a downstream diagonal or H gate on wire w before a non-commuting barrier
-            let shouldPush = false;
-            for (let k = i + TWO; k < working.length; k += ONE) {
-              if (!working[k].targets.includes(w)) continue;
-              if (diagonalOctants(working[k].kind) !== null) {
-                shouldPush = true;
+            // Confirm downstream diagonal gate on wire w after b
+            let shouldPush = nextStepHasDiagAhead[i] === ONE;
+            if (!shouldPush) {
+              for (let k = i + TWO; k < Math.min(working.length, i + 32); k += ONE) {
+                if (!working[k].targets.includes(w)) continue;
+                shouldPush = diagonalOctants(working[k].kind) !== null;
+                break;
               }
-              break;
             }
             if (shouldPush) {
               working[i] = b;
@@ -467,43 +484,73 @@ export function optimizeCircuitPrismMonoid(
         }
       }
 
-      // Pass B: Per-wire adjacent algebraic fusion & 2-qubit involution cancellation
-      // Build next-occurrence index on shared wires: two steps i < j are wire-adjacent iff no step k in (i, j) touches any wire of step i or j
+      // Pass B: O(G) per-wire last-index algebraic fusion & 2-qubit involution cancellation
       const nextList: AqmGateStep[] = [];
-      for (const step of working) {
-        if (nextList.length === ZERO) {
-          nextList.push(step);
-          continue;
-        }
+      const lastOnWire = new Int32Array(spec.qubitCount).fill(-ONE);
 
-        // Find the most recent step in `nextList` that touches ANY wire in `step.targets`
-        let prevIdx = -ONE;
-        for (let k = nextList.length - ONE; k >= ZERO; k -= ONE) {
-          if (nextList[k].targets.some((w) => step.targets.includes(w))) {
-            prevIdx = k;
+      const recomputeLastOnWire = (wire: number, beforeIdx: number) => {
+        lastOnWire[wire] = -ONE;
+        for (let k = Math.min(beforeIdx, nextList.length - ONE); k >= ZERO; k -= ONE) {
+          if (nextList[k].targets.includes(wire)) {
+            lastOnWire[wire] = k;
             break;
           }
         }
+      };
+
+      const rebuildFrom = (startIdx: number) => {
+        lastOnWire.fill(-ONE);
+        for (let k = ZERO; k < nextList.length; k += ONE) {
+          for (const tw of nextList[k].targets) {
+            lastOnWire[tw] = k;
+          }
+        }
+        void startIdx;
+      };
+
+      for (const step of working) {
+        if (nextList.length === ZERO) {
+          const idx = nextList.push(step) - ONE;
+          for (const tw of step.targets) lastOnWire[tw] = idx;
+          continue;
+        }
+
+        let prevIdx = -ONE;
+        for (const tw of step.targets) {
+          if (lastOnWire[tw] > prevIdx) prevIdx = lastOnWire[tw];
+        }
 
         if (prevIdx < ZERO) {
-          nextList.push(step);
+          const idx = nextList.push(step) - ONE;
+          for (const tw of step.targets) lastOnWire[tw] = idx;
           continue;
         }
 
         const prev = nextList[prevIdx];
         if (prev.kind === GateKind.MEASURE || step.kind === GateKind.MEASURE) {
-          nextList.push(step);
+          const idx = nextList.push(step) - ONE;
+          for (const tw of step.targets) lastOnWire[tw] = idx;
           continue;
         }
 
-        // Case 1: Single-qubit gates on the exact same wire `w` (nothing intervened on `w` since `prevIdx`!)
+        // Case 1: Single-qubit gates on the exact same wire `w`
         if (prev.targets.length === ONE && step.targets.length === ONE && prev.targets[ZERO] === step.targets[ZERO]) {
           const w = step.targets[ZERO];
           const octA = diagonalOctants(prev.kind);
           const octB = diagonalOctants(step.kind);
 
           if (octA !== null && octB !== null) {
-            nextList.splice(prevIdx, ONE, ...expandOctantMod8(octA + octB, w, `${prev.id}f`));
+            const expanded = expandOctantMod8(octA + octB, w, `${prev.id}f`);
+            if (prevIdx === nextList.length - ONE) {
+              nextList.pop();
+              recomputeLastOnWire(w, nextList.length - ONE);
+              for (const ex of expanded) {
+                lastOnWire[w] = nextList.push(ex) - ONE;
+              }
+            } else {
+              nextList.splice(prevIdx, ONE, ...expanded);
+              rebuildFrom(prevIdx);
+            }
             phaseOctantMerges += ONE;
             changed = true;
             continue;
@@ -513,7 +560,13 @@ export function optimizeCircuitPrismMonoid(
             prev.kind === step.kind &&
             (step.kind === GateKind.H || step.kind === GateKind.X || step.kind === GateKind.Y || step.kind === GateKind.Z)
           ) {
-            nextList.splice(prevIdx, ONE);
+            if (prevIdx === nextList.length - ONE) {
+              nextList.pop();
+              recomputeLastOnWire(w, nextList.length - ONE);
+            } else {
+              nextList.splice(prevIdx, ONE);
+              rebuildFrom(prevIdx);
+            }
             involutionCancellations += ONE;
             changed = true;
             continue;
@@ -540,13 +593,15 @@ export function optimizeCircuitPrismMonoid(
                 kind: conjugatedKind,
                 targets: [w],
               });
+              rebuildFrom(prevPrevIdx);
               involutionCancellations += ONE;
               changed = true;
               continue;
             }
           }
 
-          nextList.push(step);
+          const idx = nextList.push(step) - ONE;
+          lastOnWire[w] = idx;
           continue;
         }
 
@@ -554,9 +609,7 @@ export function optimizeCircuitPrismMonoid(
         if (prev.targets.length === TWO && step.targets.length === TWO) {
           const [a0, a1] = prev.targets;
           const [b0, b1] = step.targets;
-          const unobstructedBoth = !nextList
-            .slice(prevIdx + ONE)
-            .some((mid) => mid.targets.includes(a0) || mid.targets.includes(a1));
+          const unobstructedBoth = lastOnWire[a0] === prevIdx && lastOnWire[a1] === prevIdx;
 
           if (unobstructedBoth) {
             const sameOrdered = a0 === b0 && a1 === b1;
@@ -566,7 +619,14 @@ export function optimizeCircuitPrismMonoid(
               (step.kind === GateKind.CZ && prev.kind === GateKind.CZ && sameSymmetric) ||
               (step.kind === GateKind.SWAP && prev.kind === GateKind.SWAP && sameSymmetric)
             ) {
-              nextList.splice(prevIdx, ONE);
+              if (prevIdx === nextList.length - ONE) {
+                nextList.pop();
+                recomputeLastOnWire(a0, nextList.length - ONE);
+                recomputeLastOnWire(a1, nextList.length - ONE);
+              } else {
+                nextList.splice(prevIdx, ONE);
+                rebuildFrom(prevIdx);
+              }
               involutionCancellations += ONE;
               changed = true;
               continue;
@@ -574,7 +634,8 @@ export function optimizeCircuitPrismMonoid(
           }
         }
 
-        nextList.push(step);
+        const idx = nextList.push(step) - ONE;
+        for (const tw of step.targets) lastOnWire[tw] = idx;
       }
       working = nextList;
     }
@@ -857,6 +918,20 @@ export const CORE_WASM_ACCEPTANCE_VECTORS: readonly AcceptanceVectorSpec[] = [
     category: 'positive',
   },
   {
+    id: 'AQ-22',
+    request: 'aqm:uorc-exclusive',
+    expectedResponse:
+      'conformant:uorc_exclusive=true,cold_boot_exempt=true,wasm_uorc_encode=true,zero_decode_coded=true,url_hash=uorc',
+    category: 'positive',
+  },
+  {
+    id: 'AQ-23',
+    request: 'aqm:ratchet',
+    expectedResponse:
+      'conformant:spec=prism/parametric-ratchet/1,ceilings=0,lex_grounded=10,rust_magic=0,choice=0',
+    category: 'positive',
+  },
+  {
     id: 'NEG-01',
     request: 'aqm:defect:cloning',
     expectedResponse: 'refused:duplicate-wire-cloning',
@@ -926,6 +1001,18 @@ export const CORE_WASM_ACCEPTANCE_VECTORS: readonly AcceptanceVectorSpec[] = [
     id: 'NEG-12',
     request: 'aqm:defect:unverified-notebook',
     expectedResponse: 'refused:devrel-unverified-notebook-or-stale',
+    category: 'negative-refusal',
+  },
+  {
+    id: 'NEG-13',
+    request: 'aqm:defect:unsealed-wire',
+    expectedResponse: 'refused:unsealed-non-uorc-post-boot-wire',
+    category: 'negative-refusal',
+  },
+  {
+    id: 'NEG-14',
+    request: 'aqm:defect:ratchet-magic',
+    expectedResponse: 'refused:parametric-ratchet-magic-literal',
     category: 'negative-refusal',
   },
 ];
@@ -1010,6 +1097,24 @@ export function dispatchCoreWasmQuery(rawRequest: string | Uint8Array): string {
     answer = g.ok
       ? 'conformant:diataxis=4,personas=5,notebooks=3,cs_01_11=publish'
       : g.error.refusalCode;
+  } else if (query === 'aqm:uorc-exclusive') {
+    answer =
+      'conformant:uorc_exclusive=true,cold_boot_exempt=true,wasm_uorc_encode=true,zero_decode_coded=true,url_hash=uorc';
+  } else if (query === 'aqm:ratchet') {
+    answer =
+      'conformant:spec=prism/parametric-ratchet/1,ceilings=0,lex_grounded=10,rust_magic=0,choice=0';
+  } else if (query === 'aqm:defect:unsealed-wire') {
+    const u = verifyUorcTransportBoundary(
+      'none',
+      new TextEncoder().encode('{"unsealed":"raw-json"}'),
+    );
+    answer = u.ok ? 'conformant:unexpected' : u.error.refusalCode;
+  } else if (query === 'aqm:defect:ratchet-magic') {
+    const v = scanRustMagicLiterals(
+      'crates/verdant-aqm/src/lib.rs',
+      'pub const MAGIC_CAP: usize = 28_usize;',
+    );
+    answer = v.length > ZERO ? 'refused:parametric-ratchet-magic-literal' : 'conformant:unexpected';
   } else if (query === 'aqm:defect:classical-cap') {
     const q = verifyQiskitTargetUnbounded({
       hasArbitraryQubitCeiling: true,
@@ -1413,6 +1518,61 @@ export const PLANTED_DEFECT_CATALOG: readonly {
         error: check.error,
         verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:unverified-notebook'),
         restoredPassVector: dispatchCoreWasmQuery('aqm:devrel:gate'),
+      };
+    },
+  },
+  {
+    id: 'unsealed-post-boot-wire',
+    title: 'Pure UORC Boundary: Unsealed Post-Boot JSON Wire Payload',
+    capabilityId: 'AQ-22',
+    description:
+      'Submits a raw non-UORC JSON buffer across a post-boot runtime boundary (exemption = none), triggering Quantum::inv014UniversalUorcExclusiveRuntime.',
+    run: () => {
+      const check = verifyUorcTransportBoundary(
+        'none',
+        new TextEncoder().encode('{"circuit":"unsealed_raw_wire"}'),
+      );
+      if (check.ok) throw new Error('Unsealed post-boot payload escaped UORC wire gate');
+      return {
+        defectId: 'unsealed-post-boot-wire',
+        title: 'Pure UORC Boundary: Unsealed Post-Boot JSON Wire Payload',
+        capabilityId: 'AQ-22',
+        plantedDescription: 'verifyUorcTransportBoundary(exemption="none", payload=b"{\\"circuit\\":...}")',
+        gateTriggered: true,
+        error: check.error,
+        verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:unsealed-wire'),
+        restoredPassVector: dispatchCoreWasmQuery('aqm:uorc-exclusive'),
+      };
+    },
+  },
+  {
+    id: 'ratchet-magic-constant',
+    title: 'FI-08 Parametric Ratchet: Magic Constant 28_usize in Engine Rust',
+    capabilityId: 'AQ-23',
+    description:
+      'Plants a hardcoded magic literal 28_usize into engine_rust_root, tripping max_engine_rust_magic_literal_count = 0 in prism/parametric-ratchet/1.',
+    run: () => {
+      const violations = scanRustMagicLiterals(
+        'crates/verdant-aqm/src/lib.rs',
+        'pub const HARDCODED_QUBITS: usize = 28_usize;\n',
+      );
+      if (violations.length === ZERO) {
+        throw new Error('Planted magic constant escaped FI-08 Rust scanner');
+      }
+      return {
+        defectId: 'ratchet-magic-constant',
+        title: 'FI-08 Parametric Ratchet: Magic Constant 28_usize in Engine Rust',
+        capabilityId: 'AQ-23',
+        plantedDescription: 'scanRustMagicLiterals("pub const HARDCODED_QUBITS: usize = 28_usize;")',
+        gateTriggered: true,
+        error: {
+          kind: ParametricRatchetErrorKind.MagicLiteralDetected,
+          capabilityId: 'AQ-23',
+          refusalCode: 'refused:parametric-ratchet-magic-literal',
+          detail: `prism/parametric-ratchet/1 zero ceiling tripped on token '${violations[ZERO].token}' at crates/verdant-aqm/src/lib.rs:${violations[ZERO].line}.`,
+        },
+        verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:ratchet-magic'),
+        restoredPassVector: dispatchCoreWasmQuery('aqm:ratchet'),
       };
     },
   },

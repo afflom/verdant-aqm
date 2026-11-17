@@ -1,8 +1,15 @@
-# FI-08 Zero-Constants Parametric Ratchet for verdant-aqm
+# Permanent Zero-Constants & Purely Parametric Ratchet (FI-08 / AQ-23).
+# Every ceiling is permanently locked at 0 from commit 1 so no magic constants,
+# ungrounded LexLean strata, String ontology fields, or non-constructive Classical.choice axioms can enter.
 
-[ratchet]
-zero_magic_literals = true
+spec = "prism/parametric-ratchet/1"
+ontology_root = "app/src/Foundation/Ontology/V1/Model.lex.tex"
+engine_rust_root = "crates/verdant-aqm/src"
+additional_rust_roots = []
+
 pure_zero_one_lex_modules = [
+  "app/src/Foundation/Ontology/V1/Model.lex.tex",
+  "app/src/Foundation/Bytes.lex.tex",
   "app/src/Quantum.lex.tex",
   "app/src/Architecture.lex.tex",
   "app/src/Design.lex.tex",
@@ -12,27 +19,61 @@ pure_zero_one_lex_modules = [
   "app/src/Compliance.lex.tex",
   "app/src/Honesty.lex.tex",
 ]
-guarded_runtime_modules = [
-  "src/aqm/stratum0.ts",
-  "src/aqm/prismKernel.ts",
-  "src/aqm/cyclotomic.ts",
-  "src/aqm/mps.ts",
-  "src/aqm/stabilizer.ts",
-  "src/aqm/tropical.ts",
-  "src/aqm/atlasUtqc.ts",
-  "src/aqm/codedMatmul.ts",
-  "src/aqm/holoGuest.ts",
-  "src/aqm/qiskitBackend.ts",
-  "src/aqm/qiskitOracle.ts",
-  "src/aqm/devrelGuides.ts",
-]
 
-[strata]
-s0_foundation = "Constructive {0, 1} pow2Constructive, BoundedBuffer(64/512), BLAKE3 kappa, W5HCertificate"
-s1_tensor = "Sparse BigInt Z[zeta_8] kets, ExactMps Z[zeta_8] tensor trains, 64-bit F_2 symplectic tableau, Atlas MTC, uor-matmul zero-decode"
-s2_dag = "Unbounded Kahn acyclic circuit layer DAG validation and wire-collision barrier checks"
-s3_rollback = "SHA-256 DeterministicInputJournal, Born-rule RollbackSession, #vdnt= URL snapshots"
-s4_streaming = "UORC-SHA256-CHAIN-v1 LOD0..LOD4 progressive frames, OrderRope lossless gate, 2-of-3 Stitch XOR parity"
-s5_verifier = "Hologram v4 VerdantAqm.holo archive + real zero-import wasm32 Core-Wasm Web Worker verifier"
-s6_spatial = "WebGL2 PBR + 16x16 Software Tile PBR 3D Bloch manifolds, parametric [[d^2, 1, d]] surface-code lattices, and causal lightcones"
-s7_cybernetics = "Q15 LIF CyberneticObserverLoop, 4-bit CodedSlmDirector with DenialWins guard, Euler-Bernoulli modal audio"
+[ceilings]
+max_ontology_root_literal_gt_one_count = 0
+max_ontology_root_string_field_count = 0
+max_classical_choice_count = 0
+max_ungrounded_lex_module_count = 0
+max_domain_lex_magic_literal_count = 0
+max_engine_rust_magic_literal_count = 0
+
+[[stratum_module]]
+path = "app/src/Foundation/Ontology/V1/Model.lex.tex"
+stratum = 0
+role = "Constructive {0, 1} arithmetic, prime generators, W5H certificates, and 8-stratum obstruction calculus."
+
+[[stratum_module]]
+path = "app/src/Foundation/Bytes.lex.tex"
+stratum = 0
+role = "Bounded deterministic byte slices, UORC archive framing, and ordering primitives without Classical.choice."
+
+[[stratum_module]]
+path = "app/src/Quantum.lex.tex"
+stratum = 1
+role = "Unbounded quantum ISA, sparse Z[zeta_8] cyclotomic kets, F_2 bit-planes, Atlas MTC, UORC-exclusive wire laws, and zero-ceiling ratchet invariants."
+
+[[stratum_module]]
+path = "app/src/Architecture.lex.tex"
+stratum = 2
+role = "ISO/IEC/IEEE 42010 architecture stakeholders, concerns, runtime components, and viewpoints."
+
+[[stratum_module]]
+path = "app/src/Design.lex.tex"
+stratum = 2
+role = "ISO 19450 OPM quantum-streaming pipeline and OMG UML 2.5.1 collapse/rollback lifecycle state machine."
+
+[[stratum_module]]
+path = "app/src/Security.lex.tex"
+stratum = 3
+role = "STRIDE threat model, zero-import Core-Wasm containment, BLAKE3/SHA-256 UORC seals, and DenialWins guard."
+
+[[stratum_module]]
+path = "app/src/Quality.lex.tex"
+stratum = 4
+role = "ISO/IEC 25010:2023 product quality characteristics and constructive acceptance vector thresholds."
+
+[[stratum_module]]
+path = "app/src/Compliance.lex.tex"
+stratum = 5
+role = "Standards compliance obligations across NIST SHA-256, BLAKE3 Holo v4, Qiskit BackendV2, UORC, and Prism-DevRel."
+
+[[stratum_module]]
+path = "app/src/Honesty.lex.tex"
+stratum = 6
+role = "UTQC row-honesty decision table and Prism-DevRel publish/regenerate/refuse gate."
+
+[[stratum_module]]
+path = "app/src/Features.lex.tex"
+stratum = 7
+role = "Capability register AQ-01..AQ-23 and end-to-end stakeholder journey assignments."

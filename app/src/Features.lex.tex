@@ -32,7 +32,9 @@ inductive{
     {name: aq18ZeroImportWasmComputeKernels, fields: []},
     {name: aq19QiskitBackendV2Unbounded, fields: []},
     {name: aq20QiskitPrimitivesV2Exact, fields: []},
-    {name: aq21QiskitOracleAndDevRelPublish, fields: []}
+    {name: aq21QiskitOracleAndDevRelPublish, fields: []},
+    {name: aq22UniversalUorcExclusiveWire, fields: []},
+    {name: aq23ParametricZeroConstantsRatchet, fields: []}
   ]
 }
 
@@ -61,15 +63,17 @@ definition{
     | CapabilityId.aq18ZeroImportWasmComputeKernels => Stakeholder.browserRuntimeOperator
     | CapabilityId.aq19QiskitBackendV2Unbounded => Stakeholder.qiskitSdkAndDevRelUser
     | CapabilityId.aq20QiskitPrimitivesV2Exact => Stakeholder.qiskitSdkAndDevRelUser
-    | CapabilityId.aq21QiskitOracleAndDevRelPublish => Stakeholder.qiskitSdkAndDevRelUser),
+    | CapabilityId.aq21QiskitOracleAndDevRelPublish => Stakeholder.qiskitSdkAndDevRelUser
+    | CapabilityId.aq22UniversalUorcExclusiveWire => Stakeholder.browserRuntimeOperator
+    | CapabilityId.aq23ParametricZeroConstantsRatchet => Stakeholder.formalVerificationAuditor),
   axioms: []
 }
 
 theorem{
   name: everyFeatureJourneyed,
-  statement: ((((capabilityOwnerStakeholder CapabilityId.aq13AtlasMtcAndHoloBraid)
-      = Stakeholder.qecTopologicalResearcher)
-    ∧ ((capabilityOwnerStakeholder CapabilityId.aq15HoloV4RealCoreWasmGuest)
+  statement: ((((capabilityOwnerStakeholder CapabilityId.aq22UniversalUorcExclusiveWire)
+      = Stakeholder.browserRuntimeOperator)
+    ∧ ((capabilityOwnerStakeholder CapabilityId.aq23ParametricZeroConstantsRatchet)
       = Stakeholder.formalVerificationAuditor))
     ∧ ((capabilityOwnerStakeholder CapabilityId.aq19QiskitBackendV2Unbounded)
       = Stakeholder.qiskitSdkAndDevRelUser)),

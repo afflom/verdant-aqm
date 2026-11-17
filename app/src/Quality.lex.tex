@@ -28,7 +28,7 @@ definition{
   name: pinnedAcceptanceVectorCount,
   parameters: [],
   result: Nat,
-  body: ((Quantum::natTwentyFour) + (Quantum::natEight)),
+  body: (((Quantum::natTwentyFour) + (Quantum::natEight)) + (Quantum::natFour)),
   axioms: []
 }
 
@@ -58,7 +58,7 @@ definition{
 
 theorem{
   name: pinnedQualityThresholdsHold,
-  statement: ((((pinnedAcceptanceVectorCount) = ((Quantum::natTwentyFour) + (Quantum::natEight)))
+  statement: ((((pinnedAcceptanceVectorCount) = (((Quantum::natTwentyFour) + (Quantum::natEight)) + (Quantum::natFour)))
     ∧ ((pinnedWasmExportCount) = (Quantum::natSix)))
     ∧ (((pinnedStitchThreshold) = (Quantum::natTwo))
       ∧ ((pinnedTileEdgePixels) = (Quantum::natSixteen)))),

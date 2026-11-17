@@ -14,7 +14,7 @@
  *  - Live Qiskit Python / OpenQASM notebook cell interpreter for interactive `.ipynb` execution in the browser.
  */
 
-import { weaveOpenQasmWithSkWeaver } from './atlasUtqc';
+import { executeAtlasHolospaceBatch, weaveOpenQasmWithSkWeaver } from './atlasUtqc';
 import { blake3Hex, blake3Kappa } from './blake3';
 import {
   computeExactTotalNormSqSparse,
@@ -23,12 +23,23 @@ import {
   zSqrt2ToFloat,
   executeCyclotomicBatch,
 } from './cyclotomic';
+import { runWasmSymplecticCommute } from './holoGuest';
+import {
+  ExactMpsState,
+  computeExactMpsPauliExpectation,
+  executeExactMpsBatch,
+  sampleExactMpsBornChainRule,
+} from './mps';
 import {
   optimizeCircuitPrismMonoid,
   verifyQiskitTargetUnbounded,
 } from './prismKernel';
 import {
-  createInitialTableau,
+  cloneTableau,
+  columnPlanesToSymplecticTableau,
+  compileAffineStabilizerMeasurementFrame,
+  executeStabilizerBatch,
+  parityBigInt,
   stepStabilizerTableau,
   verifyStabilizersCommute,
 } from './stabilizer';
@@ -42,6 +53,7 @@ import {
   QiskitBackendErrorKind,
   QuantumIsaErrorKind,
 } from './types';
+import { compressUorcPortable, decompressUorcPortable } from './uorc';
 
 export type QiskitParamExpr = number | string;
 
@@ -126,6 +138,7 @@ const ISA_ALIAS_MAP: Record<string, string> = {
 export type VerdantQiskitSubstrate =
   | 'StabilizerTableau'
   | 'CyclotomicExact'
+  | 'ExactMps'
   | 'ExactSparseContinuum'
   | 'AtlasHolospace';
 
@@ -693,6 +706,9 @@ export function selectOptimalQiskitSubstrate(
   let isExactCyclotomic = true;
   let seenMeasure = false;
   let hasMidCircuitMeasureOrReset = false;
+  const branchingWires = new Set<number>();
+  let maxWireSpan = 0;
+  let hasMultiQubit3 = false;
 
   for (const inst of circuit.instructions) {
     const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
@@ -703,11 +719,26 @@ export function selectOptimalQiskitSubstrate(
     }
     if (canon === 'reset') {
       hasMidCircuitMeasureOrReset = true;
-      isPureClifford = false; // Route mid-circuit reset through exact ket/shot trajectory
+      // Qubit reset is a projective Z-measurement + conditional Pauli-X — 100% pure Gottesman-Knill Clifford!
       continue;
     }
     if (seenMeasure) {
       hasMidCircuitMeasureOrReset = true;
+    }
+
+    if (canon === 'h' || canon === 'sx' || canon === 'sxdg') {
+      branchingWires.add(inst.qubits[0]);
+    } else if (canon === 'ch') {
+      branchingWires.add(inst.qubits[1]);
+    }
+
+    if (inst.qubits.length === 2) {
+      maxWireSpan = Math.max(maxWireSpan, Math.abs(inst.qubits[0] - inst.qubits[1]));
+    } else if (inst.qubits.length >= 3) {
+      hasMultiQubit3 = true;
+      const lo = Math.min(...inst.qubits);
+      const hi = Math.max(...inst.qubits);
+      maxWireSpan = Math.max(maxWireSpan, hi - lo);
     }
 
     if (canon === 't' || canon === 'tdg' || canon === 'ch' || canon === 'ccx' || canon === 'cswap') {
@@ -732,7 +763,7 @@ export function selectOptimalQiskitSubstrate(
     if (!info || !info.isExactCyclotomic) isExactCyclotomic = false;
   }
 
-  if (isPureClifford && !hasMidCircuitMeasureOrReset) {
+  if (isPureClifford) {
     return {
       substrate: 'StabilizerTableau',
       isPureClifford: true,
@@ -741,8 +772,14 @@ export function selectOptimalQiskitSubstrate(
     };
   }
   if (isExactCyclotomic) {
+    // Route wide dense-superposition 1D/local non-Clifford circuits (e.g. 64q..256q H+T+CZ/CX) to ExactMps tensor-train!
+    const preferExactMps =
+      !hasMidCircuitMeasureOrReset &&
+      !hasMultiQubit3 &&
+      branchingWires.size > 16 &&
+      maxWireSpan <= 4;
     return {
-      substrate: 'CyclotomicExact',
+      substrate: preferExactMps ? 'ExactMps' : 'CyclotomicExact',
       isPureClifford: false,
       isExactCyclotomic: true,
       hasMidCircuitMeasureOrReset,
@@ -1323,12 +1360,7 @@ function computeStabilizerPauliExpectation(
       `QiskitBackendError::MalformedPauliObservableArity: Pauli string '${pauliStr}' length ${clean.length} != num_qubits ${circuit.numQubits}.`,
     );
   }
-  // For large pure-Clifford circuits, use StabilizerTableau directly; for <= 14q or quick general path we can cross-check!
-  let tab = createInitialTableau(circuit.numQubits);
   const steps = decomposeExactQiskitUnitaryPrefix(circuit.instructions, {});
-  for (const st of steps) {
-    tab = stepStabilizerTableau(tab, st, 0.5).nextTableau;
-  }
   // Measure expectation of Pauli string by conjugating P -> U^\dagger P U into computational basis via adjoint Clifford!
   // Wait: conjugating P through the inverse Clifford circuit `steps.reverse()` maps `<0| U^\dagger P U |0>` to `<0| P' |0>`:
   //   - If P' has ANY X or Y component on ANY qubit, `<0| P' |0> = 0`!
@@ -1437,7 +1469,6 @@ function computeStabilizerPauliExpectation(
   for (let q = 0; q < n; q += 1) {
     if (px[q] !== 0) return 0;
   }
-  void tab;
   if (phaseMod4 === 0) return 1;
   if (phaseMod4 === 2) return -1;
   return 0;
@@ -1519,6 +1550,50 @@ export class VerdantAqmResult {
     if (!found) throw new Error(`Experiment '${experiment}' not found in Result`);
     return found;
   }
+
+  public toUorcBytes(): Uint8Array {
+    return serializeQiskitResultToUorc(this);
+  }
+
+  public static fromUorcBytes(uorcArchive: Uint8Array): VerdantAqmResult {
+    return deserializeQiskitResultFromUorc(uorcArchive);
+  }
+}
+
+export function serializeQiskitResultToUorc(result: VerdantAqmResult): Uint8Array {
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      schema: 'verdant-aqm/qiskit-result/1',
+      backend_name: result.backend_name,
+      backend_version: result.backend_version,
+      job_id: result.job_id,
+      results: result.results,
+    }),
+  );
+  return compressUorcPortable(payload);
+}
+
+export function deserializeQiskitResultFromUorc(uorcArchive: Uint8Array): VerdantAqmResult {
+  const opened = decompressUorcPortable(uorcArchive);
+  if (!opened.ok) {
+    throw new Error(`${opened.error.kind}: ${opened.error.detail}`);
+  }
+  const parsed = JSON.parse(new TextDecoder().decode(opened.payload)) as {
+    schema?: string;
+    backend_name: string;
+    backend_version: string;
+    job_id: string;
+    results: readonly QiskitExperimentResult[];
+  };
+  if (parsed.schema !== 'verdant-aqm/qiskit-result/1' || !Array.isArray(parsed.results)) {
+    throw new Error('UorcWireError::CorruptedCodedBundle: Invalid Qiskit Result UORC payload schema');
+  }
+  return new VerdantAqmResult({
+    backendName: parsed.backend_name,
+    backendVersion: parsed.backend_version,
+    jobId: parsed.job_id,
+    results: parsed.results,
+  });
 }
 
 export class VerdantAqmJob {
@@ -1693,6 +1768,7 @@ export class VerdantAqmBackend {
   ): {
     substrate: VerdantQiskitSubstrate;
     sparseState: SparseComplexMap | null;
+    mpsState: ExactMpsState | null;
     circuit: QiskitCircuitDefinition;
     fusionEliminated: number;
   } {
@@ -1709,17 +1785,42 @@ export class VerdantAqmBackend {
       { ...circuit, instructions: unitaryInstructions },
       bindings,
     );
+    const chosenSubstrate: VerdantQiskitSubstrate =
+      this.options.substrate === 'auto' ? route.substrate : this.options.substrate;
 
-    if (route.substrate === 'StabilizerTableau' && circuit.numQubits > 16) {
+    // O(gates) Heisenberg adjoint Pauli conjugation works for ANY Clifford qubit width n >= 1!
+    if (chosenSubstrate === 'StabilizerTableau' && route.isPureClifford) {
       return {
         substrate: 'StabilizerTableau',
         sparseState: null,
+        mpsState: null,
         circuit: { ...circuit, instructions: unitaryInstructions },
         fusionEliminated: 0,
       };
     }
 
-    if (route.isExactCyclotomic) {
+    if (chosenSubstrate === 'ExactMps' && route.isExactCyclotomic) {
+      const rawSteps = decomposeExactQiskitUnitaryPrefix(unitaryInstructions, bindings);
+      const fused = optimizeCircuitPrismMonoid({
+        name: circuit.name,
+        description: 'Qiskit ExactMps compilation',
+        qubitCount: circuit.numQubits,
+        seed: 1,
+        backend: AqmBackendMode.ExactMps,
+        steps: rawSteps,
+      });
+      const execSteps = fused.ok ? fused.optimizedSpec.steps : rawSteps;
+      const mps = executeExactMpsBatch(circuit.numQubits, execSteps);
+      return {
+        substrate: 'ExactMps',
+        sparseState: null,
+        mpsState: mps,
+        circuit,
+        fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
+      };
+    }
+
+    if (route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum' && chosenSubstrate !== 'AtlasHolospace') {
       const rawSteps = decomposeExactQiskitUnitaryPrefix(unitaryInstructions, bindings);
       const fused = optimizeCircuitPrismMonoid({
         name: circuit.name,
@@ -1732,8 +1833,9 @@ export class VerdantAqmBackend {
       const execSteps = fused.ok ? fused.optimizedSpec.steps : rawSteps;
       const cyc = executeCyclotomicBatch(circuit.numQubits, execSteps);
       return {
-        substrate: route.substrate,
+        substrate: 'CyclotomicExact',
         sparseState: cyclotomicToSparseComplex(cyc),
+        mpsState: null,
         circuit,
         fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
       };
@@ -1744,8 +1846,9 @@ export class VerdantAqmBackend {
       sparse = applyQiskitUnitaryInstructionSparse(sparse, inst, bindings);
     }
     return {
-      substrate: 'ExactSparseContinuum',
+      substrate: chosenSubstrate === 'AtlasHolospace' ? 'AtlasHolospace' : 'ExactSparseContinuum',
       sparseState: sparse,
+      mpsState: null,
       circuit,
       fusionEliminated: 0,
     };
@@ -1790,18 +1893,35 @@ export class VerdantAqmBackend {
     let normExactOne = true;
     let skResidual: number | undefined;
 
-    if (cfg.weaveAtlas && circuit.numQubits <= 32) {
-      const qasmLines = [`OPENQASM 2.0;`, `qreg q[${circuit.numQubits}];`];
+    // Unbounded SkWeaver topological compilation across unique single-qubit continuous rotations (zero qubit ceiling!)
+    if (cfg.weaveAtlas || chosenSubstrate === 'AtlasHolospace') {
+      const uniqueRotations = new Map<string, { op: string; theta: number }>();
       for (const inst of circuit.instructions.slice(0, firstNonUnitaryIdx)) {
         const c = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
         if (c === 'rx' || c === 'ry' || c === 'rz') {
           const th = evaluateQiskitAngle(inst.params?.[0] ?? 0, bindings);
-          qasmLines.push(`${c}(${th}) q[${inst.qubits[0]}];`);
+          const key = `${c}:${th.toPrecision(15)}`;
+          if (!uniqueRotations.has(key)) uniqueRotations.set(key, { op: c, theta: th });
         }
       }
-      if (qasmLines.length > 2) {
+      if (uniqueRotations.size > 0) {
+        const qasmLines = [`OPENQASM 2.0;`, `qreg q[${uniqueRotations.size}];`];
+        let idx = 0;
+        for (const rot of uniqueRotations.values()) {
+          qasmLines.push(`${rot.op}(${rot.theta}) q[${idx}];`);
+          idx += 1;
+        }
         const w = weaveOpenQasmWithSkWeaver(qasmLines.join('\n'), 'Certified22', 1e-4);
         if (w.ok) skResidual = w.maxProjectiveResidual;
+      } else if (chosenSubstrate === 'AtlasHolospace' && route.isExactCyclotomic) {
+        const prefixSteps = decomposeExactQiskitUnitaryPrefix(
+          circuit.instructions.slice(0, firstNonUnitaryIdx),
+          bindings,
+        ).filter((s) => s.targets.length === 1);
+        if (prefixSteps.length > 0) {
+          executeAtlasHolospaceBatch(circuit.numQubits, prefixSteps);
+          skResidual = 0;
+        }
       }
     }
 
@@ -1811,6 +1931,40 @@ export class VerdantAqmBackend {
       formattedCounts[formatted] = (formattedCounts[formatted] ?? 0) + 1;
       hexCounts[hex] = (hexCounts[hex] ?? 0) + 1;
       if (cfg.memory) shotMemory.push(formatted);
+    };
+
+    /** O(shots * log M) binary-search sampler over pre-grouped formatted classical outcomes! */
+    const sampleFromOutcomeProbabilities = () => {
+      const entries = Object.entries(probabilities).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      if (entries.length === 0) return;
+      const fmtTable: string[] = new Array(entries.length);
+      const hexTable: string[] = new Array(entries.length);
+      const cumTable = new Float64Array(entries.length);
+      let acc = 0;
+      for (let i = 0; i < entries.length; i += 1) {
+        fmtTable[i] = entries[i][0];
+        hexTable[i] = bitstringToQiskitHex(entries[i][0]);
+        acc += entries[i][1];
+        cumTable[i] = acc;
+      }
+      // Clamp final bucket to >= 1.0 to absorb floating-point tail rounding
+      cumTable[entries.length - 1] = Math.max(1.0, acc);
+
+      for (let s = 0; s < cfg.shots; s += 1) {
+        const u = rng();
+        let lo = 0;
+        let hi = entries.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (u <= cumTable[mid]) hi = mid;
+          else lo = mid + 1;
+        }
+        const fmt = fmtTable[lo];
+        const hex = hexTable[lo];
+        formattedCounts[fmt] = (formattedCounts[fmt] ?? 0) + 1;
+        hexCounts[hex] = (hexCounts[hex] ?? 0) + 1;
+        if (cfg.memory) shotMemory.push(fmt);
+      }
     };
 
     if (tailIsPureMeasurement) {
@@ -1834,42 +1988,133 @@ export class VerdantAqmBackend {
         const execSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawSteps;
         fusionEliminated = fused && fused.ok ? fused.gatesEliminated : 0;
 
-        let baseTab = createInitialTableau(circuit.numQubits);
-        for (const st of execSteps) {
-          baseTab = stepStabilizerTableau(baseTab, st, 0.5).nextTableau;
-        }
-        normExactOne = verifyStabilizersCommute(baseTab).commutes;
+        const colTab = executeStabilizerBatch(circuit.numQubits, execSteps);
         activeKets = circuit.numQubits;
 
         if (measureOps.length > 0 && circuit.numClbits > 0) {
-          // Sample shots using exact Aaronson-Gottesman tableau collapse (cloning only measured shot state)
+          const uniqueWires: number[] = [];
+          for (const mOp of measureOps) {
+            if (!uniqueWires.includes(mOp.qubits[0])) uniqueWires.push(mOp.qubits[0]);
+          }
+          const frame = compileAffineStabilizerMeasurementFrame(colTab, uniqueWires);
+          const tab = frame.tableau;
+          if (tab.n <= 128) {
+            normExactOne = verifyStabilizersCommute(tab).commutes;
+          } else if (tab.n >= 2) {
+            const wpr = tab.wordsPerRow;
+            const r0 = tab.n * wpr;
+            const rLast = (2 * tab.n - 1) * wpr;
+            normExactOne = runWasmSymplecticCommute(
+              tab.xWords.subarray(r0, r0 + wpr),
+              tab.zWords.subarray(r0, r0 + wpr),
+              tab.xWords.subarray(rLast, rLast + wpr),
+              tab.zWords.subarray(rLast, rLast + wpr),
+            );
+          }
+
+          // Exact analytical probability distribution when coin subspace <= 4,096 branches
+          if (frame.numCoins <= 12) {
+            const branchCount = 1 << frame.numCoins;
+            const invBranch = 1 / branchCount;
+            for (let cVal = 0; cVal < branchCount; cVal += 1) {
+              const coinVec = BigInt(cVal);
+              const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+              for (const mOp of measureOps) {
+                const law = frame.wireLaws.get(mOp.qubits[0])!;
+                clbits[mOp.clbits![0]] = (law.baseBit ^ parityBigInt(law.coinMask & coinVec)) as 0 | 1;
+              }
+              const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
+              probabilities[fmt] = (probabilities[fmt] ?? 0) + invBranch;
+            }
+          }
+
+          // Sample `cfg.shots` draws in O(shots * |measureOps|) pure bitwise XORs!
+          const drawCoins = (): bigint => {
+            let coins = 0n;
+            let rem = frame.numCoins;
+            let shift = 0n;
+            while (rem > 0) {
+              const chunk = Math.min(rem, 30);
+              const rInt = Math.floor(rng() * (1 << chunk));
+              coins |= BigInt(rInt) << shift;
+              shift += BigInt(chunk);
+              rem -= chunk;
+            }
+            return coins;
+          };
+
           for (let s = 0; s < cfg.shots; s += 1) {
-            let shotTab = baseTab;
-            const wireCache = new Map<number, 0 | 1>();
+            const coinVec = drawCoins();
             const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
             for (const mOp of measureOps) {
-              const q = mOp.qubits[0];
-              const c = mOp.clbits![0];
-              let bit = wireCache.get(q);
-              if (bit === undefined) {
-                const res = stepStabilizerTableau(
-                  shotTab,
-                  { id: 'm', kind: GateKind.MEASURE, targets: [q] },
-                  rng(),
-                );
-                shotTab = res.nextTableau;
-                bit = res.measurementOutcome?.outcome ?? 0;
-                wireCache.set(q, bit);
-              }
-              clbits[c] = bit;
+              const law = frame.wireLaws.get(mOp.qubits[0])!;
+              clbits[mOp.clbits![0]] = (law.baseBit ^ parityBigInt(law.coinMask & coinVec)) as 0 | 1;
             }
             recordBitstringShot(clbits);
           }
-          for (const [k, cnt] of Object.entries(formattedCounts)) {
-            probabilities[k] = cnt / cfg.shots;
+          if (frame.numCoins > 12) {
+            for (const [k, cnt] of Object.entries(formattedCounts)) {
+              probabilities[k] = cnt / cfg.shots;
+            }
           }
         }
-      } else if (route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum') {
+      } else if (chosenSubstrate === 'ExactMps' && route.isExactCyclotomic) {
+        const rawSteps = decomposeExactQiskitUnitaryPrefix(prefixInstructions, bindings);
+        const fused = cfg.prismFusion
+          ? optimizeCircuitPrismMonoid({
+              name: circuit.name,
+              description: 'ExactMps prefix',
+              qubitCount: circuit.numQubits,
+              seed: cfg.seed,
+              backend: AqmBackendMode.ExactMps,
+              steps: rawSteps,
+            })
+          : null;
+        const execSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawSteps;
+        fusionEliminated = fused && fused.ok ? fused.gatesEliminated : 0;
+
+        const mps = executeExactMpsBatch(circuit.numQubits, execSteps);
+        normExactOne = true;
+
+        if (measureOps.length > 0 && circuit.numClbits > 0) {
+          const uniqueWires: number[] = [];
+          for (const mOp of measureOps) {
+            if (!uniqueWires.includes(mOp.qubits[0])) uniqueWires.push(mOp.qubits[0]);
+          }
+          const sampled = sampleExactMpsBornChainRule(mps, uniqueWires, cfg.shots, rng);
+          activeKets = sampled.maxChi;
+
+          if (sampled.analyticalMarginals) {
+            for (const [mask, prob] of sampled.analyticalMarginals) {
+              const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+              for (const mOp of measureOps) {
+                const bitIdx = uniqueWires.indexOf(mOp.qubits[0]);
+                clbits[mOp.clbits![0]] = (mask & (1 << bitIdx)) !== 0 ? 1 : 0;
+              }
+              const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
+              probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
+            }
+          }
+
+          for (const outcomeMap of sampled.shotOutcomes) {
+            const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+            for (const mOp of measureOps) {
+              clbits[mOp.clbits![0]] = outcomeMap.get(mOp.qubits[0]) ?? 0;
+            }
+            recordBitstringShot(clbits);
+          }
+
+          if (!sampled.analyticalMarginals) {
+            for (const [k, cnt] of Object.entries(formattedCounts)) {
+              probabilities[k] = cnt / cfg.shots;
+            }
+          }
+        }
+      } else if (
+        route.isExactCyclotomic &&
+        chosenSubstrate !== 'ExactSparseContinuum' &&
+        chosenSubstrate !== 'AtlasHolospace'
+      ) {
         const rawSteps = decomposeExactQiskitUnitaryPrefix(prefixInstructions, bindings);
         const fused = cfg.prismFusion
           ? optimizeCircuitPrismMonoid({
@@ -1901,7 +2146,7 @@ export class VerdantAqmBackend {
               ? zSqrt2ToFloat({ p: cyc.normDenom.p >> ratioShift, q: cyc.normDenom.q >> ratioShift })
               : zSqrt2ToFloat(cyc.normDenom);
           const invDenom = 1 / Math.max(1e-30, denomFloat);
-          const ketCdf: Array<{ ket: bigint; prob: number }> = [];
+
           for (const [ket, amp] of cyc.support) {
             const z2 = z8NormSq(amp);
             const numerFloat =
@@ -1910,7 +2155,6 @@ export class VerdantAqmBackend {
                 : zSqrt2ToFloat(z2);
             const prob = numerFloat * invDenom;
             if (prob > 1e-16) {
-              ketCdf.push({ ket, prob });
               const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
               for (const mOp of measureOps) {
                 const q = mOp.qubits[0];
@@ -1921,81 +2165,123 @@ export class VerdantAqmBackend {
               probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
             }
           }
-          ketCdf.sort((a, b) => (a.ket < b.ket ? -1 : a.ket > b.ket ? 1 : 0));
-
-          for (let s = 0; s < cfg.shots; s += 1) {
-            const u = rng();
-            let acc = 0;
-            let picked = ketCdf[ketCdf.length - 1]?.ket ?? 0n;
-            for (const entry of ketCdf) {
-              acc += entry.prob;
-              if (u <= acc) {
-                picked = entry.ket;
-                break;
-              }
-            }
-            const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-            for (const mOp of measureOps) {
-              const q = mOp.qubits[0];
-              const c = mOp.clbits![0];
-              clbits[c] = (picked & (1n << BigInt(q))) !== 0n ? 1 : 0;
-            }
-            recordBitstringShot(clbits);
-          }
+          sampleFromOutcomeProbabilities();
         }
       } else {
-        // Exact Sparse Continuum unitary prefix + analytical ket distribution
+        // Exact Sparse Continuum / AtlasHolospace unitary prefix + O(log M) binary-search sampling
         let sparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
         for (const inst of prefixInstructions) {
           sparse = applyQiskitUnitaryInstructionSparse(sparse, inst, bindings);
         }
         activeKets = sparse.size;
         let mass = 0;
-        const ketCdf: Array<{ ket: bigint; prob: number }> = [];
         for (const [ket, [r, im]] of sparse) {
           const prob = r * r + im * im;
           mass += prob;
-          if (prob > 1e-16) {
-            ketCdf.push({ ket, prob });
-            if (measureOps.length > 0 && circuit.numClbits > 0) {
-              const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-              for (const mOp of measureOps) {
-                clbits[mOp.clbits![0]] = (ket & (1n << BigInt(mOp.qubits[0]))) !== 0n ? 1 : 0;
-              }
-              const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
-              probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
+          if (prob > 1e-16 && measureOps.length > 0 && circuit.numClbits > 0) {
+            const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+            for (const mOp of measureOps) {
+              clbits[mOp.clbits![0]] = (ket & (1n << BigInt(mOp.qubits[0]))) !== 0n ? 1 : 0;
             }
+            const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
+            probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
           }
         }
         normExactOne = Math.abs(mass - 1) < 1e-11;
-        ketCdf.sort((a, b) => (a.ket < b.ket ? -1 : a.ket > b.ket ? 1 : 0));
 
         if (measureOps.length > 0 && circuit.numClbits > 0) {
-          for (let s = 0; s < cfg.shots; s += 1) {
-            const u = rng();
-            let acc = 0;
-            let picked = ketCdf[ketCdf.length - 1]?.ket ?? 0n;
-            for (const entry of ketCdf) {
-              acc += entry.prob;
-              if (u <= acc) {
-                picked = entry.ket;
-                break;
-              }
-            }
-            const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-            for (const mOp of measureOps) {
-              clbits[mOp.clbits![0]] = (picked & (1n << BigInt(mOp.qubits[0]))) !== 0n ? 1 : 0;
-            }
-            recordBitstringShot(clbits);
-          }
+          sampleFromOutcomeProbabilities();
         }
       }
-    } else {
-      // General dynamic mid-circuit measurement & reset shot-trajectory execution!
+    } else if (chosenSubstrate === 'StabilizerTableau' && route.isPureClifford) {
+      // Polynomial Gottesman-Knill mid-circuit measurement & reset trajectory execution (scales to 512+ qubits!)
+      const prefixInstructions = circuit.instructions.slice(0, firstNonUnitaryIdx);
+      const rawPrefixSteps = decomposeExactQiskitUnitaryPrefix(prefixInstructions, bindings);
+      const fused = cfg.prismFusion
+        ? optimizeCircuitPrismMonoid({
+            name: circuit.name,
+            description: 'Stabilizer mid-circuit prefix',
+            qubitCount: circuit.numQubits,
+            seed: cfg.seed,
+            backend: AqmBackendMode.StabilizerTableau,
+            steps: rawPrefixSteps,
+          })
+        : null;
+      const prefixSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawPrefixSteps;
+      fusionEliminated = fused && fused.ok ? fused.gatesEliminated : 0;
+      const baseTab = columnPlanesToSymplecticTableau(
+        executeStabilizerBatch(circuit.numQubits, prefixSteps),
+      );
+      activeKets = circuit.numQubits;
+
+      // Pre-compile tail instructions into fast step actions once
+      const tailCompiled = tailInstructions.map((inst, tIdx) => {
+        const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
+        if (canon === 'measure') {
+          return { kind: 'measure' as const, wire: inst.qubits[0], clbit: inst.clbits![0] };
+        }
+        if (canon === 'reset') {
+          return { kind: 'reset' as const, wire: inst.qubits[0] };
+        }
+        if (canon === 'barrier' || canon === 'id') {
+          return { kind: 'noop' as const };
+        }
+        return {
+          kind: 'unitary' as const,
+          steps: decomposeExactQiskitUnitaryPrefix([inst], bindings),
+          tIdx,
+        };
+      });
+
       for (let s = 0; s < cfg.shots; s += 1) {
-        let sparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
+        let curTab = cloneTableau(baseTab);
         const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-        for (const inst of circuit.instructions) {
+        for (const action of tailCompiled) {
+          if (action.kind === 'measure') {
+            const m = stepStabilizerTableau(
+              curTab,
+              { id: 'mc-m', kind: GateKind.MEASURE, targets: [action.wire] },
+              rng(),
+            );
+            curTab = m.nextTableau as ReturnType<typeof cloneTableau>;
+            clbits[action.clbit] = m.measurementOutcome!.outcome;
+          } else if (action.kind === 'reset') {
+            const m = stepStabilizerTableau(
+              curTab,
+              { id: 'mc-r', kind: GateKind.MEASURE, targets: [action.wire] },
+              rng(),
+            );
+            curTab = m.nextTableau as ReturnType<typeof cloneTableau>;
+            if (m.measurementOutcome!.outcome === 1) {
+              curTab = stepStabilizerTableau(
+                curTab,
+                { id: 'mc-rx', kind: GateKind.X, targets: [action.wire] },
+                0.5,
+              ).nextTableau as ReturnType<typeof cloneTableau>;
+            }
+          } else if (action.kind === 'unitary') {
+            for (const st of action.steps) {
+              curTab = stepStabilizerTableau(curTab, st, 0.5).nextTableau as ReturnType<typeof cloneTableau>;
+            }
+          }
+        }
+        if (circuit.numClbits > 0) {
+          recordBitstringShot(clbits);
+        }
+      }
+      for (const [k, cnt] of Object.entries(formattedCounts)) {
+        probabilities[k] = cnt / cfg.shots;
+      }
+    } else {
+      // General dynamic mid-circuit measurement & reset shot-trajectory execution with cached deterministic prefix!
+      let baseSparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
+      for (const inst of circuit.instructions.slice(0, firstNonUnitaryIdx)) {
+        baseSparse = applyQiskitUnitaryInstructionSparse(baseSparse, inst, bindings);
+      }
+      for (let s = 0; s < cfg.shots; s += 1) {
+        let sparse: SparseComplexMap = new Map(baseSparse);
+        const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+        for (const inst of tailInstructions) {
           const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
           if (canon === 'measure') {
             const m = measureOrResetSparseKet(sparse, inst.qubits[0], rng(), false);
@@ -2152,24 +2438,27 @@ export class VerdantAqmSamplerV2 {
 
       const circuit = rawCircuit instanceof QuantumCircuitBuilder ? rawCircuit.build() : rawCircuit;
       const shots = pubShots ?? shotsOverride ?? this.default_shots;
-      const bindMap = normalizeParameterBindings(circuit.parameters, paramValues)[0] ?? {};
+      const bindSweeps = normalizeParameterBindings(circuit.parameters, paramValues);
 
       const job = this.backend.run(circuit, {
         shots,
         memory: true,
-        parameter_binds: [bindMap],
+        parameter_binds: bindSweeps,
       });
       const res = job.result();
       const exp = res.results[0];
-      const mem = res.get_memory(0);
-      const measArr = new VerdantBitArray(mem, circuit.numClbits);
+      const allMem: string[] = [];
+      for (let bIdx = 0; bIdx < res.results.length; bIdx += 1) {
+        allMem.push(...res.get_memory(bIdx));
+      }
+      const measArr = new VerdantBitArray(allMem, circuit.numClbits);
       pubResults.push({
         data: {
           meas: measArr,
           c: measArr,
         },
         metadata: {
-          shots,
+          shots: shots * bindSweeps.length,
           substrate: exp.metadata.substrate,
           holo_kappa: exp.metadata.holo_kappa,
         },
@@ -2306,7 +2595,9 @@ export class VerdantAqmEstimatorV2 {
 
           for (const [pauliStr, coeff] of terms) {
             let termExp: number;
-            if (stateEval.sparseState === null) {
+            if (stateEval.mpsState !== null) {
+              termExp = computeExactMpsPauliExpectation(stateEval.mpsState, pauliStr);
+            } else if (stateEval.sparseState === null) {
               const stabExp = computeStabilizerPauliExpectation(stateEval.circuit, pauliStr);
               if (stabExp === null) {
                 throw new Error(`Invalid Pauli string '${pauliStr}' for StabilizerTableau expectation`);
@@ -2382,7 +2673,7 @@ export class VerdantAqmProvider {
   }
 }
 
-/** Converts a `QiskitCircuitDefinition` (up to 64 qubits for 3D Bloch Studio) into an `AqmCircuitSpec` */
+/** Converts a `QiskitCircuitDefinition` into an `AqmCircuitSpec` for 3D Bloch Studio inspection */
 export function convertQiskitCircuitToStudioSpec(
   circuit: QiskitCircuitDefinition,
 ): AqmCircuitSpec | null {
@@ -2394,7 +2685,7 @@ export function convertQiskitCircuitToStudioSpec(
       const c = ISA_ALIAS_MAP[i.name.toLowerCase()] ?? i.name.toLowerCase();
       return c !== 'measure' && c !== 'reset' && c !== 'barrier';
     });
-    const steps = decomposeExactQiskitUnitaryPrefix(prefix).slice(0, 64);
+    const steps = decomposeExactQiskitUnitaryPrefix(prefix);
     return {
       name: circuit.name,
       description: `Imported from Qiskit (${circuit.numQubits}q · ${route.substrate})`,
@@ -2403,7 +2694,9 @@ export function convertQiskitCircuitToStudioSpec(
       backend:
         route.substrate === 'StabilizerTableau'
           ? AqmBackendMode.StabilizerTableau
-          : AqmBackendMode.CyclotomicExact,
+          : route.substrate === 'ExactMps'
+            ? AqmBackendMode.ExactMps
+            : AqmBackendMode.CyclotomicExact,
       steps,
     };
   } catch {
@@ -2530,6 +2823,7 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
     let activeCircuit: QuantumCircuitBuilder | null = null;
     let shots = 1024;
     let seed = 42;
+    let forcedCellSubstrate: 'auto' | VerdantQiskitSubstrate = 'auto';
     let runMode: 'backend' | 'sampler' | 'estimator' = 'backend';
     let estimatorPrecision = 0.0;
     let estimatorBindVec: number[] | undefined;
@@ -2647,11 +2941,13 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       if (seedM) seed = Number(seedM[1]);
       const precM = /precision\s*=\s*([0-9.eE+-]+)/.exec(stmt);
       if (precM) estimatorPrecision = Number(precM[1]);
+      const subM = /substrate\s*=\s*['"]([a-zA-Z]+)['"]/.exec(stmt);
+      if (subM) forcedCellSubstrate = subM[1] as 'auto' | VerdantQiskitSubstrate;
 
       if (/VerdantAqmSamplerV2|SamplerV2/.test(stmt)) runMode = 'sampler';
       if (/VerdantAqmEstimatorV2|EstimatorV2/.test(stmt)) runMode = 'estimator';
 
-      // Extract inline observable strings in estimator.run([(qc, ["ZZI", "IZZ"], [0.4])])
+      // Extract inline observable strings in estimator.run([(qc, ["ZZI", "IZZ"], [0.4])]) — zero Pauli width limit!
       if (runMode === 'estimator' && /\.run\(/.test(stmt)) {
         const vecM = /\[\s*([0-9.eE+\-,\spiPI*/]+)\s*\]\s*\)/.exec(stmt);
         if (vecM && !vecM[1].includes('"') && !vecM[1].includes("'")) {
@@ -2662,7 +2958,7 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
             .map((v) => evaluateQiskitAngle(v, numVars));
         }
         if (estimatorObservables.length === 0) {
-          const strObs = Array.from(stmt.matchAll(/['"]([IXYZ]{1,4096})['"]/g)).map((m) => m[1]);
+          const strObs = Array.from(stmt.matchAll(/['"]([IXYZ]+)['"]/g)).map((m) => m[1]);
           for (const sObs of strObs) {
             estimatorObservables.push({ label: `<${sObs}>`, terms: [[sObs, 1.0]] });
           }
@@ -2675,7 +2971,12 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
     }
 
     const builtCircuit = activeCircuit.build();
-    const backend = new VerdantAqmBackend({ shots, seed_simulator: seed, memory: true });
+    const backend = new VerdantAqmBackend({
+      shots,
+      seed_simulator: seed,
+      memory: true,
+      substrate: forcedCellSubstrate,
+    });
 
     if (runMode === 'estimator') {
       const estimator = new VerdantAqmEstimatorV2({
@@ -2683,14 +2984,15 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
         defaultPrecision: estimatorPrecision,
         seed,
       });
+      const defaultPauli = `${'Z'.repeat(Math.min(2, builtCircuit.numQubits))}${'I'.repeat(Math.max(0, builtCircuit.numQubits - 2))}`;
       const obsList: ObservableLike[] =
         estimatorObservables.length > 0
           ? estimatorObservables.map((o) => o.terms)
-          : [[`${'Z'.repeat(Math.min(2, builtCircuit.numQubits))}${'I'.repeat(Math.max(0, builtCircuit.numQubits - 2))}`, 1.0]];
+          : [[[defaultPauli, 1.0]]];
       const labels =
         estimatorObservables.length > 0
           ? estimatorObservables.map((o) => o.label)
-          : [`<${'Z'.repeat(Math.min(2, builtCircuit.numQubits))}${'I'.repeat(Math.max(0, builtCircuit.numQubits - 2))}>`];
+          : [`<${defaultPauli}>`];
 
       const pubRes = estimator.run([[builtCircuit, obsList, estimatorBindVec, estimatorPrecision]]).result()[0];
       const evArr = Array.isArray(pubRes.data.evs) ? pubRes.data.evs : [pubRes.data.evs];

@@ -7,6 +7,11 @@ import {
 } from '../aqm/journal';
 import { bytesToHex, sha256Hex } from '../aqm/sha256';
 import { AqmCircuitSpec } from '../aqm/types';
+import {
+  isUorcArchive,
+  runUorcExclusiveRuntimeAudit,
+  writeUorcToOpfsCache,
+} from '../aqm/uorc';
 
 interface CustodyUorcPanelProps {
   spec: AqmCircuitSpec;
@@ -34,6 +39,19 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
     () => (uorcFrames.length > 0 ? uorcFrames[uorcFrames.length - 1].rawBytes : new Uint8Array(1)),
     [uorcFrames],
   );
+
+  const uorcWireAudit = useMemo(() => {
+    const digests = Array.from({ length: spec.steps.length + 1 }, (_, idx) =>
+      sha256Hex(`${spec.name}:${idx}:${activeFrame?.chainDigest ?? '0'}`),
+    );
+    return runUorcExclusiveRuntimeAudit(spec, activeFrame?.cursor ?? spec.steps.length, digests);
+  }, [spec, activeFrame]);
+
+  useEffect(() => {
+    if (isUorcArchive(lod4Bytes)) {
+      void writeUorcToOpfsCache(`lod4-${spec.name}`, lod4Bytes).catch(() => {});
+    }
+  }, [lod4Bytes, spec.name]);
 
   // Real non-extractable WebCrypto ECDSA P-256 Prism ID signing (`prism/identity/4`, VE-24)
   useEffect(() => {
@@ -108,15 +126,94 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            Progressive UORC-SHA256-CHAIN-v1 Streaming & Stitch Peer Custody
+            Pure UORC Post-Boot Wire, Progressive LOD Streaming & Stitch Custody
           </h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400 font-mono tabular-nums">
             <span>{prismIdentityId}</span>
+            <span className="mx-2" aria-hidden="true">·</span>
+            <span>VE-36 / AQ-22 b&quot;UORC&quot; Wire Exclusive</span>
             <span className="mx-2" aria-hidden="true">·</span>
             <span>Active Studio Tier LOD{activeLod}</span>
             <span className="mx-2" aria-hidden="true">·</span>
             <span>2-of-3 GF(2) XOR Parity</span>
           </p>
+        </div>
+      </div>
+
+      {/* Live VE-36 / AQ-22 Pure UORC Post-Boot Wire & Boundary Exemptions Telemetry */}
+      <div className="p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Pure UORC Post-Boot Wire &amp; Modeled Boundary Exemptions (VE-36 · AQ-22)
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Every post-boot payload is framed in a self-delimiting b&quot;UORC&quot; container with a 32-byte FIPS SHA-256 seal across Rust, TypeScript, and Python.
+            </p>
+          </div>
+          <div className="text-xs font-mono tabular-nums text-emerald-700 dark:text-emerald-400 font-semibold">
+            {uorcWireAudit.uorcExclusiveActive
+              ? 'Pure UORC Wire & 3 Exemptions Verified'
+              : 'Wire Boundary Check Pending'}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+            <div className="text-slate-500">#uorc= Snapshot Container</div>
+            <div className="font-semibold text-slate-900 dark:text-slate-100">
+              b&quot;UORC&quot; · {uorcWireAudit.uorcSnapshotBytes} B ({uorcWireAudit.rawVdntBytes} B raw)
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400">
+              Round-trip: {uorcWireAudit.snapshotRoundtripExact ? 'Exact' : 'Mismatch'}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+            <div className="text-slate-500">Tamper &amp; Unsealed Refusals</div>
+            <div className="font-semibold text-slate-900 dark:text-slate-100">
+              1-Bit Flip: {uorcWireAudit.tamperOneBitRefused ? 'Refused' : 'Failed'}
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400">
+              Unsealed Wire: {uorcWireAudit.unsealedPostBootRefused ? 'Refused' : 'Failed'}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+            <div className="text-slate-500">Zero-Decode CDMX CodedMatrix</div>
+            <div className="font-semibold text-slate-900 dark:text-slate-100">
+              0 Float Allocs · {uorcWireAudit.codedMatrixUorcBytes} B .uorc
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400">
+              BigInt Contraction: {uorcWireAudit.codedZeroDecodeVerified ? 'Exact' : 'Mismatch'}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+            <div className="text-slate-500">Stride-8 Checkpoints &amp; OPFS</div>
+            <div className="font-semibold text-slate-900 dark:text-slate-100">
+              {uorcWireAudit.stride8CheckpointCount} Checkpoints · {uorcWireAudit.stride8TotalUorcBytes} B
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400 truncate">
+              OPFS Cache: lod4-{spec.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 14)}.uorc
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
+          <span>Modeled Exemptions (Quantum.lex.tex::UorcExemptionKind):</span>
+          <span className="mx-2" aria-hidden="true">·</span>
+          <span className="text-slate-900 dark:text-slate-200">
+            cold-boot-http-holo ({uorcWireAudit.exemptionsVerified.coldBootHttpAndHolo ? 'PASS' : 'FAIL'})
+          </span>
+          <span className="mx-2" aria-hidden="true">·</span>
+          <span className="text-slate-900 dark:text-slate-200">
+            core-wasm-verifier-64b ({uorcWireAudit.exemptionsVerified.coreWasmBoundedTextVerifier ? 'PASS' : 'FAIL'})
+          </span>
+          <span className="mx-2" aria-hidden="true">·</span>
+          <span className="text-slate-900 dark:text-slate-200">
+            host-standard-interop ({uorcWireAudit.exemptionsVerified.hostStandardInteropArtifact ? 'PASS' : 'FAIL'})
+          </span>
         </div>
       </div>
 
@@ -149,6 +246,9 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
                       {frame.name}
                     </div>
                     <div className="flex items-center gap-3 text-xs font-mono tabular-nums">
+                      <span className="text-emerald-700 dark:text-emerald-400">
+                        {isUorcArchive(frame.rawBytes) ? 'b"UORC"' : 'Raw'}
+                      </span>
                       <span className="text-slate-500">{frame.workUnits} work units</span>
                       <span className="text-slate-500">{frame.byteLength} B</span>
                       <span

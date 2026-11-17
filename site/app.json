@@ -20,7 +20,7 @@
     "headline": "Unbounded Qiskit BackendV2, Primitives V2, Jupyter notebooks, and zero-magic-constant quantum execution in Python and every browser.",
     "detail": "Every Qiskit circuit and primitive PUB executes without artificial dense 2ⁿ qubit caps via exact uor-matmul semiring contractions, zero-import wasm32 compute kernels, and SHA-256-locked Qiskit/qiskit oracle verification."
   },
-  "claim": "AQ-15, AQ-18 & AQ-19..AQ-21: the zero-import wasm32 VerdantAqm.holo v4 guest answers conformant across all 32 pinned capability and planted-defect vectors, validates unbounded Qiskit BackendV2 / SamplerV2 / EstimatorV2 parity against the SHA-256-pinned Qiskit/qiskit oracle, and enforces prism-devrel publication gates.",
+  "claim": "AQ-15, AQ-18 & AQ-19..AQ-23: the zero-import wasm32 VerdantAqm.holo v4 guest answers conformant across all 36 pinned capability and planted-defect vectors, enforces pure UORC post-boot transport (VE-36) and prism/parametric-ratchet/1 zero ceilings (FI-08), validates unbounded Qiskit BackendV2 / SamplerV2 / EstimatorV2 parity against the SHA-256-pinned Qiskit/qiskit oracle, and enforces prism-devrel publication gates.",
   "proposition": {
     "name": "QuantumMachineLawfulAndConserved",
     "text": "CircuitLinearAndAcyclic spec :=\n  DistinctGateWires spec.steps = true\n  /\\ KahnTopologicalAcyclic spec.steps = true\n\nQiskitTargetUnboundedValid cap n shots :=\n  not cap = true /\\ 1 <= n /\\ 1 <= shots\n\nConservationLedgerValid state :=\n  exactNormSquared Z[sqrt 2] state.support = state.normDenom",
@@ -58,17 +58,28 @@
       "where": "app/src/Honesty.lex.tex"
     },
     {
+      "name": "inv013UorcPostBootMandatoryUnlessExempt",
+      "statement": "uorcTransportMandatory none false = false /\\ uorcTransportMandatory none true = true",
+      "how": "Proved by constructive kernel decision requiring SHA-256-sealed b\"UORC\" framing on post-boot wires unless explicitly exempt",
+      "where": "app/src/Quantum.lex.tex"
+    },
+    {
       "name": "coreWasmSandboxZeroImports",
-      "statement": "pinnedAcceptanceVectorCount = 32 /\\ pinnedWasmExportCount = 6",
-      "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 32/32 holo_run vector replay",
+      "statement": "pinnedAcceptanceVectorCount = 36 /\\ pinnedWasmExportCount = 6",
+      "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 36/36 holo_run vector replay",
       "where": "app/src/Quality.lex.tex"
     }
   ],
   "pinned": [
     {
-      "name": "aqm_core_wasm_32_vectors",
-      "what": "Verifies the compiled zero-import wasm32 VerdantAqm.holo v4 archive, 356-byte APP_MANIFEST, 32-byte BLAKE3 footer, 6 Wasm exports, and all 32 positive/defect holo_run vectors.",
+      "name": "aqm_core_wasm_36_vectors",
+      "what": "Verifies the compiled zero-import wasm32 VerdantAqm.holo v4 archive, 356-byte APP_MANIFEST, 32-byte BLAKE3 footer, 6 Wasm exports, and all 36 positive/defect holo_run vectors.",
       "where": "src/aqm/aqm.test.ts"
+    },
+    {
+      "name": "parametric_ratchet_six_zero_ceilings",
+      "what": "Enforces prism/parametric-ratchet/1 (0 ontology literals > 1, 0 ontology String fields, 0 Classical.choice, 0 ungrounded .lex.tex modules, 0 domain .lex.tex magic literals, 0 Rust magic literals) across 10 .lex.tex modules and crates/verdant-aqm.",
+      "where": "model/parametric-ratchet.toml, src/aqm/ratchet.ts, bootstrap/ratchet-gate.ts"
     },
     {
       "name": "qiskit_backend_v2_external_oracle",
@@ -96,7 +107,7 @@
   ],
   "attestations": {
     "proof": {
-      "id": "verified across AQ-01..AQ-21, Qiskit/qiskit external oracle, and 11 planted-defect refusal gates",
+      "id": "verified across AQ-01..AQ-23, prism/parametric-ratchet/1, Qiskit/qiskit external oracle, and 13 planted-defect refusal gates",
       "url": "https://github.com/afflom/verdant-aqm/blob/main/CONFORMANCE.md"
     },
     "build": {

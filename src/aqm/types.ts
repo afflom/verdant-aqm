@@ -71,6 +71,48 @@ export enum DevRelPublishErrorKind {
   RegenerateFromPinnedSubject = 'DevRelPublishOutcome::RegenerateFromPinnedSubject',
 }
 
+export enum UorcWireErrorKind {
+  MissingUorcMagic = 'UorcWireError::MissingUorcMagic',
+  SealDigestMismatch = 'UorcWireError::SealDigestMismatch',
+  UnsealedPostBootPayload = 'UorcWireError::UnsealedPostBootPayload',
+  CorruptedCodedBundle = 'UorcWireError::CorruptedCodedBundle',
+}
+
+export enum ParametricRatchetErrorKind {
+  WeakenedNonZeroCeiling = 'ParametricRatchetError::WeakenedNonZeroCeiling',
+  OntologyRootViolation = 'ParametricRatchetError::OntologyRootViolation',
+  UngroundedLexModule = 'ParametricRatchetError::UngroundedLexModule',
+  MagicLiteralDetected = 'ParametricRatchetError::MagicLiteralDetected',
+  ClassicalChoiceDetected = 'ParametricRatchetError::ClassicalChoiceDetected',
+}
+
+export type CapabilityId =
+  | 'AQ-01'
+  | 'AQ-02'
+  | 'AQ-03'
+  | 'AQ-04'
+  | 'AQ-05'
+  | 'AQ-06'
+  | 'AQ-07'
+  | 'AQ-08'
+  | 'AQ-09'
+  | 'AQ-10'
+  | 'AQ-11'
+  | 'AQ-12'
+  | 'AQ-13'
+  | 'AQ-14'
+  | 'AQ-15'
+  | 'AQ-16'
+  | 'AQ-17'
+  | 'AQ-18'
+  | 'AQ-19'
+  | 'AQ-20'
+  | 'AQ-21'
+  | 'AQ-22'
+  | 'AQ-23';
+
+export type DevRelGateAction = 'publish' | 'regenerate' | 'refuse';
+
 export type ModeledAqmErrorKind =
   | QuantumIsaErrorKind
   | UnitaryInvariantErrorKind
@@ -79,7 +121,9 @@ export type ModeledAqmErrorKind =
   | MeasurementJournalErrorKind
   | HonestyVerdictErrorKind
   | QiskitBackendErrorKind
-  | DevRelPublishErrorKind;
+  | DevRelPublishErrorKind
+  | UorcWireErrorKind
+  | ParametricRatchetErrorKind;
 
 export interface ModeledAqmError {
   readonly kind: ModeledAqmErrorKind;

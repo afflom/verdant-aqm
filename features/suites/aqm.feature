@@ -1,4 +1,4 @@
-Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (AQ-01..AQ-21)
+Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (AQ-01..AQ-23)
 
   Scenario: AQ-01 Constructive Stratum 0 powers of two, BLAKE3 kappa, and BoundedBuffer limits
     Given Stratum 0 derives powers of two constructively from {0, 1}
@@ -52,12 +52,18 @@ Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (
 
   Scenario: AQ-15, AQ-16, AQ-17 & AQ-18 Real Hologram v4 zero-import Core-Wasm guest, monoid gate fusion, and UTQC Row-Honesty
     Given the BLAKE3-sealed VerdantAqm.holo v4 archive and zero-import wasm32 guest
-    When compiling via WebAssembly.compile, running all 32 vectors via holo_run, and auditing ledger rows
-    Then all 32 Wasm guest vectors pass and benchmark-as-proof inflation is refused with HonestyVerdict::RefuseBenchMarkedAsProof
+    When compiling via WebAssembly.compile, running all 36 vectors via holo_run, and auditing ledger rows
+    Then all 36 Wasm guest vectors pass and benchmark-as-proof inflation is refused with HonestyVerdict::RefuseBenchMarkedAsProof
 
   Scenario: AQ-19, AQ-20 & AQ-21 Commercial Qiskit BackendV2, Primitives V2, authoritative Qiskit oracle, and prism-devrel publication
     Given the unbounded VerdantAqmBackend, VerdantAqmSamplerV2, VerdantAqmEstimatorV2, and SHA-256-locked Qiskit/qiskit oracle
     When running the authoritative Qiskit BackendV2/SamplerV2/EstimatorV2 oracle suite, Jupyter notebooks, and devrel-publish-gate
     Then 4,096-qubit GHZ, multi-clbit measurement layouts, continuous rotations, and SparsePauliOp expectations match Qiskit's analytical oracle to < 1e-12
     And arbitrary classical qubit caps or unverified notebook outputs are refused
+
+  Scenario: AQ-22 & AQ-23 Pure UORC post-boot wire with modeled exemptions and permanent zero-constants parametric ratchet
+    Given SHA-256-sealed b"UORC" post-boot archives (#uorc=, OPFS .uorc, CDMX zero-decode, stride-8 checkpoints) and model/parametric-ratchet.toml
+    When auditing unsealed post-boot bytes, 1-bit tamper mutations, the 3 boundary exemptions, and all 6 prism/parametric-ratchet/1 zero ceilings
+    Then unsealed or tampered UORC payloads are refused with UorcWireError while modeled exemptions pass
+    And all 10 .lex.tex modules and crates/verdant-aqm/src/*.rs satisfy 0/0 ratchet ceilings and catch planted magic literals
 

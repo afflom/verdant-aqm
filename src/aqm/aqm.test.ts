@@ -12,6 +12,10 @@ import test from 'node:test';
 import { assemblePagesSite } from '../../bootstrap/assemble-pages';
 import { generateAllJupyterNotebooks } from '../../bootstrap/generate-notebooks';
 import { buildPrecacheManifest } from '../../bootstrap/precache';
+import {
+  auditParametricRatchetOnDisk,
+  loadDiskRatchetWorkspace,
+} from '../../bootstrap/ratchet-gate';
 import { verifyAssembledPagesSite } from '../../bootstrap/weight-gate';
 import { computeInputKappa } from '../../ci/kappa-cache';
 
@@ -60,6 +64,7 @@ import {
 import {
   createStitchParityBundle,
   decodeVdntSnapshotToken,
+  encodeUorcSnapshotToken,
   encodeVdntSnapshotToken,
   executeCircuitRollbackSession,
   packProgressiveUorcStream,
@@ -491,8 +496,8 @@ test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm
   assert.equal(reconstructFromStitchShards(bundle, [false, true, true]).integrityVerified, true);
 
   assert.equal(routePromptWithCodedSlm('clone q0 onto q0').admitted, false);
-  assert.equal(runAllAcceptanceVectors().passed, 32);
-  assert.equal(PLANTED_DEFECT_CATALOG.length, 11);
+  assert.equal(runAllAcceptanceVectors().passed, 36);
+  assert.equal(PLANTED_DEFECT_CATALOG.length, 13);
   for (const defect of PLANTED_DEFECT_CATALOG) {
     assert.equal(defect.run().gateTriggered, true);
   }
@@ -698,7 +703,8 @@ test('GitHub Pages publishing pipeline: pages.yml, site/app.json, input-kappa ca
 
     const gate = await verifyAssembledPagesSite(scratchDir);
     assert.equal(gate.valid, true);
-    assert.equal(gate.vectorsPassed, 32);
+    assert.equal(gate.vectorsPassed, 36);
+    assert.equal(gate.ratchetVerified, true);
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
   }
@@ -738,7 +744,7 @@ test('AQ-19, AQ-20 & AQ-21: Production Qiskit BackendV2, Primitives V2, Upstream
   assert.equal(devrelAudit.fillerViolations.length, 0);
   assert.equal(devrelAudit.vagueLinkViolations.length, 0);
   assert.equal(devrelAudit.uncoveredCapabilities.length, 0);
-  assert.equal(devrelAudit.coveredCapabilities.length, 21);
+  assert.equal(devrelAudit.coveredCapabilities.length, 23);
   assert.equal(devrelAudit.unverifiedNotebooks, 0);
   assert.equal(devrelAudit.gateVerdict, 'publish');
   assert.equal(devrelAudit.gateOk, true);
@@ -781,5 +787,329 @@ test('AQ-19, AQ-20 & AQ-21: Production Qiskit BackendV2, Primitives V2, Upstream
     }
   }
 });
+
+test('AQ-22 & AQ-23: Pure UORC post-boot wire, CDMX zero-decode, Qiskit Result UORC parity & prism/parametric-ratchet/1', async () => {
+  const {
+    compressUorcPortable,
+    contractCodedMatrixUorcBundle,
+    decodeSnapshotUrlHash,
+    decompressUorcPortable,
+    isUorcArchive,
+    packCodedMatrixToUorc,
+    readUorcFromOpfsCache,
+    runUorcExclusiveRuntimeAudit,
+    verifyUorcTransportBoundary,
+    writeUorcToOpfsCache,
+  } = await import('./uorc');
+  const { verifyParametricRatchetPlantedDefects } = await import('./ratchet');
+  const {
+    QuantumCircuitBuilder,
+    VerdantAqmBackend,
+    VerdantAqmResult,
+  } = await import('./qiskitBackend');
+
+  // 1. Pure UORC portable codec round-trip (both stored short & OrderRope LZ77/RLE long) + 1-bit tamper refusal
+  const shortRaw = new TextEncoder().encode('aqm-short');
+  const shortUorc = compressUorcPortable(shortRaw);
+  assert.equal(isUorcArchive(shortUorc), true);
+  const shortOpen = decompressUorcPortable(shortUorc);
+  assert.equal(shortOpen.ok, true);
+  if (shortOpen.ok) {
+    assert.deepEqual(shortOpen.payload, shortRaw);
+  }
+
+  const repeatedRaw = new TextEncoder().encode('verdant-aqm-uorc-frame-'.repeat(64));
+  const repeatedUorc = compressUorcPortable(repeatedRaw);
+  assert.equal(isUorcArchive(repeatedUorc), true);
+  assert.ok(repeatedUorc.byteLength < repeatedRaw.byteLength);
+  const repeatedOpen = decompressUorcPortable(repeatedUorc);
+  assert.equal(repeatedOpen.ok, true);
+  if (repeatedOpen.ok) {
+    assert.equal(repeatedOpen.strategy, 1);
+    assert.deepEqual(repeatedOpen.payload, repeatedRaw);
+  }
+
+  const tampered = new Uint8Array(repeatedUorc);
+  tampered[tampered.byteLength - 1] ^= 1;
+  assert.equal(decompressUorcPortable(tampered).ok, false);
+
+  // 2. Post-boot boundary enforcement (`none`) + all 3 modeled exemptions
+  assert.equal(verifyUorcTransportBoundary('none', shortRaw).ok, false);
+  assert.equal(verifyUorcTransportBoundary('none', shortUorc).ok, true);
+  assert.equal(verifyUorcTransportBoundary('cold-boot-http-holo', shortRaw).ok, true);
+  assert.equal(verifyUorcTransportBoundary('core-wasm-verifier-64b', shortRaw).ok, true);
+  assert.equal(
+    verifyUorcTransportBoundary('core-wasm-verifier-64b', new Uint8Array(600)).ok,
+    false,
+  );
+  assert.equal(verifyUorcTransportBoundary('host-standard-interop', shortRaw).ok, true);
+
+  // 3. #uorc= snapshot URL + legacy #vdnt= backward compatibility + OPFS .uorc cache
+  const spec = {
+    name: 'UORC Bell',
+    description: 'Pure UORC snapshot test',
+    qubitCount: 2,
+    seed: 19,
+    backend: AqmBackendMode.CyclotomicExact,
+    steps: [
+      { id: 's0', kind: GateKind.H, targets: [0] },
+      { id: 's1', kind: GateKind.CNOT, targets: [0, 1] },
+    ],
+  };
+  const uorcTok = encodeUorcSnapshotToken({ spec, cursor: 2 });
+  const decUorc = decodeSnapshotUrlHash(`#uorc=${uorcTok}`);
+  assert.equal(decUorc.ok, true);
+  if (decUorc.ok) {
+    assert.equal(decUorc.scheme, 'uorc');
+    assert.equal(decUorc.value.spec.name, 'UORC Bell');
+    assert.equal(decUorc.value.cursor, 2);
+  }
+  const legacyVdnt = encodeVdntSnapshotToken({ spec, cursor: 1 });
+  const decLegacy = decodeVdntSnapshotToken(`#vdnt=${legacyVdnt}`);
+  assert.equal(decLegacy.ok, true);
+
+  await writeUorcToOpfsCache('unit-test-bell', repeatedUorc);
+  const cached = await readUorcFromOpfsCache('unit-test-bell');
+  assert.equal(cached.ok, true);
+  if (cached.ok) {
+    assert.deepEqual(cached.payload, repeatedRaw);
+  }
+
+  // 4. Zero-decode CDMX CodedMatrix inside UORC across all 3 tiers (`grid16`, `packed-nibble`, `sparse-runs`)
+  const codebook = [0n, 1n, -1n, 2n, -2n, 3n, -3n, 4n, -4n, 5n, -5n, 6n, -6n, 7n, -7n, 8n];
+  const lhs = new Uint8Array([1, 3, 0, 2, 5, 0, 7, 4]);
+  const rhs = new Uint8Array([3, 1, 0, 2, 1, 5, 4, 0]);
+  const tiers = ['grid16', 'packed-nibble', 'sparse-runs'] as const;
+  let refOut: readonly bigint[] | null = null;
+  for (const tier of tiers) {
+    const cdmxArchive = packCodedMatrixToUorc({
+      tier,
+      m: 2,
+      k: 4,
+      n: 2,
+      codebook,
+      lhsIndices: lhs,
+      rhsIndices: rhs,
+    });
+    assert.equal(isUorcArchive(cdmxArchive), true);
+    const contracted = contractCodedMatrixUorcBundle(cdmxArchive);
+    assert.equal(contracted.ok, true);
+    if (contracted.ok) {
+      assert.equal(contracted.denseFloatAllocs, 0);
+      if (!refOut) refOut = contracted.out;
+      else assert.deepEqual(contracted.out, refOut);
+    }
+  }
+
+  // 5. Qiskit VerdantAqmResult pure-UORC serialization round-trip
+  const qc = new QuantumCircuitBuilder(3, 3, 'ghz_uorc').h(0).cx(0, 1).cx(1, 2).measure_all().build();
+  const qRes = new VerdantAqmBackend({ shots: 128, seed_simulator: 42, memory: true }).run(qc).result();
+  const qUorc = qRes.toUorcBytes();
+  assert.equal(isUorcArchive(qUorc), true);
+  const qRestored = VerdantAqmResult.fromUorcBytes(qUorc);
+  assert.deepEqual(qRestored.get_counts(), qRes.get_counts());
+  assert.deepEqual(qRestored.get_memory(), qRes.get_memory());
+
+  const audit = runUorcExclusiveRuntimeAudit(spec, 2, ['d0', 'd1', 'd2']);
+  assert.equal(audit.uorcExclusiveActive, true);
+
+  // 6. Permanent zero-constants parametric ratchet (`FI-08` / `prism/parametric-ratchet/1`) on disk + 6 planted violations
+  const diskRatchet = auditParametricRatchetOnDisk();
+  assert.equal(diskRatchet.ok, true, `Ratchet violations: ${JSON.stringify(diskRatchet.violations)}`);
+  assert.equal(diskRatchet.spec, 'prism/parametric-ratchet/1');
+  assert.equal(diskRatchet.groundedLexModuleCount, 10);
+  assert.ok(diskRatchet.auditedRustFileCount >= 2);
+  assert.equal(diskRatchet.counts.ontologyRootLiteralGtOneCount, 0);
+  assert.equal(diskRatchet.counts.ontologyRootStringFieldCount, 0);
+  assert.equal(diskRatchet.counts.classicalChoiceCount, 0);
+  assert.equal(diskRatchet.counts.ungroundedLexModuleCount, 0);
+  assert.equal(diskRatchet.counts.domainLexMagicLiteralCount, 0);
+  assert.equal(diskRatchet.counts.engineRustMagicLiteralCount, 0);
+
+  const plantedRatchet = verifyParametricRatchetPlantedDefects(loadDiskRatchetWorkspace());
+  assert.equal(plantedRatchet.allCaughtAndRestored, true);
+  assert.equal(plantedRatchet.casesVerified, 6);
+});
+
+test('Zero-limits Prism & Qiskit refinement: 64q 2^64-ket ExactMps, 512q mid-circuit reset, 10,000q Clifford EstimatorV2, k=2000 Hadamard & 600-step rollback', async () => {
+  const {
+    QuantumCircuitBuilder,
+    VerdantAqmBackend,
+    VerdantAqmEstimatorV2,
+    VerdantAqmSamplerV2,
+    executeQiskitNotebookCell,
+  } = await import('./qiskitBackend');
+  const { executeCircuitRollbackSession } = await import('./journal');
+
+  // 1. Cross-check ExactMps against CyclotomicExact at n=6 on 2^6-ket non-Clifford 1D Cluster+Octant chain
+  const buildClusterOctant = (n: number) => {
+    const b = new QuantumCircuitBuilder(n, 2, `cluster_octant_${n}q`);
+    for (let q = 0; q < n; q += 1) {
+      b.h(q).t(q);
+    }
+    for (let q = 0; q < n - 1; q += 1) {
+      b.cz(q, q + 1);
+    }
+    return b;
+  };
+
+  const qc6 = buildClusterOctant(6).build();
+  const estMps6 = new VerdantAqmEstimatorV2({
+    backend: new VerdantAqmBackend({ substrate: 'ExactMps' }),
+    defaultPrecision: 0,
+  });
+  const estCyc6 = new VerdantAqmEstimatorV2({
+    backend: new VerdantAqmBackend({ substrate: 'CyclotomicExact' }),
+    defaultPrecision: 0,
+  });
+  const obs6 = ['IIZXZI', 'IIZYZI', 'ZZZZZZ', 'IIIIZX'];
+  const evMps6 = estMps6.run([[qc6, obs6]]).result()[0].data.evs as number[];
+  const evCyc6 = estCyc6.run([[qc6, obs6]]).result()[0].data.evs as number[];
+  for (let i = 0; i < obs6.length; i += 1) {
+    assert.ok(
+      Math.abs(evMps6[i] - evCyc6[i]) < 1e-12,
+      `6q ExactMps vs CyclotomicExact mismatch on ${obs6[i]}: ${evMps6[i]} vs ${evCyc6[i]}`,
+    );
+  }
+
+  // 2. 64-qubit 2^64-ket non-Clifford 1D Cluster+Octant chain auto-routes to ExactMps in BackendV2 & EstimatorV2!
+  const qc64Unmeasured = buildClusterOctant(64).build();
+  const autoEst = new VerdantAqmEstimatorV2({ defaultPrecision: 0 });
+  // Qiskit little-endian Pauli: q=31 -> index 63-31=32, q=32 -> index 31, q=33 -> index 30
+  const makeBulkPauli64 = (mid: 'X' | 'Y' | 'Z') => {
+    const chars = new Array<string>(64).fill('I');
+    chars[63 - 31] = 'Z';
+    chars[63 - 32] = mid;
+    chars[63 - 33] = 'Z';
+    return chars.join('');
+  };
+  const invSqrt2 = Math.SQRT1_2;
+  const pub64 = autoEst
+    .run([
+      [
+        qc64Unmeasured,
+        [
+          makeBulkPauli64('X'),
+          makeBulkPauli64('Y'),
+          makeBulkPauli64('Z'),
+          [
+            [makeBulkPauli64('X'), invSqrt2],
+            [makeBulkPauli64('Y'), invSqrt2],
+          ],
+        ],
+      ],
+    ])
+    .result()[0];
+  assert.equal(pub64.metadata.substrate, 'ExactMps');
+  const ev64 = pub64.data.evs as number[];
+  assert.ok(Math.abs(ev64[0] - invSqrt2) < 1e-12);
+  assert.ok(Math.abs(ev64[1] - invSqrt2) < 1e-12);
+  assert.ok(Math.abs(ev64[2] - 0) < 1e-12);
+  assert.ok(Math.abs(ev64[3] - 1.0) < 1e-12);
+
+  const qc64Measured = buildClusterOctant(64).measure([0, 63], [0, 1]).build();
+  const res64 = new VerdantAqmBackend({ shots: 512, seed_simulator: 314 }).run(qc64Measured).result();
+  assert.equal(res64.results[0].metadata.substrate, 'ExactMps');
+  assert.equal(res64.results[0].metadata.norm_exact_one, true);
+  const probs64 = res64.results[0].data.probabilities;
+  // Endpoints q=0 and q=63 on a 64-site 1D cluster state are maximally mixed -> 0.25 each!
+  for (const key of ['00', '01', '10', '11']) {
+    assert.ok(Math.abs((probs64[key] ?? 0) - 0.25) < 1e-12, `Expected 0.25 for ${key}, got ${probs64[key]}`);
+  }
+
+  // 3. 512-qubit mid-circuit measure + reset + Clifford feedforward runs in polynomial time on StabilizerTableau!
+  const mid512 = new QuantumCircuitBuilder(512, 2, 'mid_reset_512q');
+  mid512.h(0);
+  for (let q = 0; q < 511; q += 1) mid512.cx(q, q + 1);
+  mid512.measure(0, 0); // collapses all 512 qubits to |0...0> or |1...1>
+  mid512.reset(511); // deterministically resets wire 511 to |0>
+  mid512.x(511); // flips wire 511 to deterministic |1>
+  mid512.measure(511, 1);
+  const resMid512 = new VerdantAqmBackend({ shots: 64, seed_simulator: 77 }).run(mid512).result();
+  assert.equal(resMid512.results[0].metadata.substrate, 'StabilizerTableau');
+  const countsMid512 = resMid512.get_counts();
+  // c[1] (left char) MUST be '1' on every shot, and c[0] (right char) splits ~50/50!
+  for (const k of Object.keys(countsMid512)) {
+    assert.equal(k[0], '1', `Expected wire 511 after reset+X to be '1', got outcome '${k}'`);
+  }
+  assert.equal((countsMid512['10'] ?? 0) + (countsMid512['11'] ?? 0), 64);
+
+  // 4. 10,000-qubit Clifford EstimatorV2 exact Heisenberg adjoint expectation + >4,096-char notebook Pauli observable!
+  const n10k = 10_000;
+  const qc10k = new QuantumCircuitBuilder(n10k, 0, 'ghz_10000q');
+  qc10k.h(0);
+  for (let q = 0; q < n10k - 1; q += 1) qc10k.cx(q, q + 1);
+  qc10k.z(n10k - 1); // flips X^{\otimes n} eigenvalue from +1 to -1!
+  const zzEnds10k = `Z${'I'.repeat(n10k - 2)}Z`;
+  const allX10k = 'X'.repeat(n10k);
+  const pub10k = autoEst.run([[qc10k.build(), [zzEnds10k, allX10k]]]).result()[0];
+  assert.equal(pub10k.metadata.substrate, 'StabilizerTableau');
+  assert.deepEqual(pub10k.data.evs, [1, -1]);
+
+  // Verify executeQiskitNotebookCell parses >4,096-character Pauli observables with zero regex truncation!
+  const nb5000 = executeQiskitNotebookCell(
+    [
+      'from qiskit import QuantumCircuit',
+      'from qiskit_verdant_aqm import VerdantAqmEstimatorV2',
+      'qc = QuantumCircuit(5000, name="pauli_5000q")',
+      'qc.x(0)',
+      'qc.x(4999)',
+      'est = VerdantAqmEstimatorV2(precision=0.0)',
+      `job = est.run([(qc, ["Z${'I'.repeat(4998)}Z", "Z${'I'.repeat(4999)}"])])`,
+    ].join('\n'),
+  );
+  assert.equal(nb5000.ok, true, nb5000.error);
+  assert.deepEqual(
+    nb5000.expectations?.map((e) => e.value),
+    [1, -1],
+  );
+
+  // 5. Deep Hadamard + T (k = 2,000 > 1,075 IEEE-754 float exponent limit) without float underflow!
+  const deepHt = new QuantumCircuitBuilder(1, 1, 'deep_ht_2000');
+  for (let i = 0; i < 2000; i += 1) {
+    deepHt.h(0).t(0);
+  }
+  deepHt.measure(0, 0);
+  const resDeep = new VerdantAqmBackend({
+    shots: 256,
+    seed_simulator: 11,
+    prism_fusion: false,
+    substrate: 'CyclotomicExact',
+  })
+    .run(deepHt)
+    .result();
+  assert.equal(resDeep.results[0].metadata.norm_exact_one, true);
+  const probMassDeep = Object.values(resDeep.results[0].data.probabilities).reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(probMassDeep - 1.0) < 1e-12, `Deep Hadamard probability mass underflowed: ${probMassDeep}`);
+
+  // 6. VerdantAqmSamplerV2 multi-parameter sweep [[0], [Math.PI]]
+  const sweepQc = new QuantumCircuitBuilder(1, 1, 'sweep_ry').ry('theta', 0).measure(0, 0).build();
+  const sampler = new VerdantAqmSamplerV2({ defaultShots: 50, seed: 123 });
+  const sweepRes = sampler.run([[sweepQc, [[0], [Math.PI]], 50]]).result()[0];
+  assert.equal(sweepRes.data.meas.num_shots, 100);
+  assert.deepEqual(sweepRes.data.meas.get_counts(), { '0': 50, '1': 50 });
+
+  // 7. Unbounded 600-step rollback journal (zero 256-step silent truncation!)
+  const steps600 = Array.from({ length: 600 }, (_, idx) => ({
+    id: `s-${idx}`,
+    kind: idx % 2 === 0 ? GateKind.H : GateKind.T,
+    targets: [idx % 2],
+  }));
+  const session600 = await executeCircuitRollbackSession({
+    name: 'Journal 600 Steps',
+    description: 'Unbounded rollback session verification',
+    qubitCount: 2,
+    seed: 9,
+    backend: AqmBackendMode.CyclotomicExact,
+    steps: steps600,
+  });
+  assert.equal(session600.ok, true);
+  if (session600.ok) {
+    assert.equal(session600.frames.length, 601);
+    assert.equal(session600.journal.length, 600);
+  }
+});
+
+
 
 

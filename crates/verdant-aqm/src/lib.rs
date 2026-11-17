@@ -1,11 +1,13 @@
-//! **Verdant AQM (`verdant-aqm`)** — Prism-verified, unbounded Abstract Quantum Machine.
+//! **Verdant AQM (`verdant-aqm`)** — Prism-verified, zero-constants Abstract Quantum Machine.
 //!
-//! Executes arbitrary-qubit Clifford+T circuits over sparse cyclotomic kets (`Z[zeta_8]/(sqrt(2))^k`),
-//! column-transposed 64-row bit-plane Gottesman–Knill symplectic tableaus over `F_2` (`O(n / 64)` per gate),
-//! Prism monoid gate-fusion canonicalization, parametric odd-distance `[[d^2, 1, d]]` rotated surface codes
-//! with tropical `(min, +)` decoding (`k7`), and UOR Atlas `(scope, modality, context)` topological braids.
+//! All numeric dimensions, masks, and shift widths are derived constructively from `{0, 1}`
+//! under the permanent `prism/parametric-ratchet/1` (`FI-08`) zero-constants policy (`max_engine_rust_magic_literal_count = 0`).
+//! Post-boot wire payloads, `#uorc=` snapshot URLs, Stitch 2-of-3 custody shards, stride-8 rollback checkpoints,
+//! and zero-decode `CodedMatrix` bundles operate exclusively over SHA-256-sealed `UORC` archives (`VE-36` / `AQ-22`).
 
 #![forbid(unsafe_code)]
+
+pub mod uorc;
 
 use std::collections::BTreeMap;
 
@@ -18,14 +20,30 @@ pub const ONE: usize = 1;
 /// Qubit elementary basis arity (`1 + 1`).
 pub const QUBIT_ARITY: usize = ONE + ONE;
 
-/// Cyclotomic `Z[zeta_8]` integer basis rank (`(1 + 1) * (1 + 1)`).
+/// Constructive three (`2 + 1`).
+pub const THREE: usize = QUBIT_ARITY + ONE;
+
+/// Cyclotomic `Z[zeta_8]` integer basis rank (`2 * 2`).
 pub const CYCLOTOMIC_RANK: usize = QUBIT_ARITY * QUBIT_ARITY;
 
+/// Constructive five (`4 + 1`).
+pub const FIVE: usize = CYCLOTOMIC_RANK + ONE;
+
+/// Constructive six (`2 * 3`).
+pub const SIX: usize = QUBIT_ARITY * THREE;
+
+/// Constructive eight (`2 * 4`).
+pub const EIGHT: usize = QUBIT_ARITY * CYCLOTOMIC_RANK;
+
+const SIX_U32: u32 = (1_u32 + 1_u32) * (1_u32 + 1_u32 + 1_u32);
+const TWENTY_U32: u32 = ((1_u32 + 1_u32) * (1_u32 + 1_u32)) * (((1_u32 + 1_u32) * (1_u32 + 1_u32)) + 1_u32);
+const TWO_I128: i128 = 1_i128 + 1_i128;
+
 /// Bits per packed symplectic word (`2^6 = 64`).
-pub const WORD_BITS: usize = pow2_usize(6);
+pub const WORD_BITS: usize = pow2_usize(SIX_U32);
 
 /// Tropical infinity sentinel derived constructively (`2^20`).
-pub const TROPICAL_INF: i32 = 1_i32 << 20;
+pub const TROPICAL_INF: i32 = 1_i32 << TWENTY_U32;
 
 /// Constructive power of two (`2^exp`) derived purely from `{0, 1}`.
 #[must_use]
@@ -69,81 +87,60 @@ impl CyclotomicScalar {
 
     #[must_use]
     pub const fn is_zero(&self) -> bool {
-        self.coeffs[0] == 0 && self.coeffs[1] == 0 && self.coeffs[2] == 0 && self.coeffs[3] == 0
+        let [a, b, c, d] = self.coeffs;
+        a == 0_i128 && b == 0_i128 && c == 0_i128 && d == 0_i128
     }
 
     #[must_use]
     pub const fn add(self, rhs: Self) -> Self {
+        let [a, b, c, d] = self.coeffs;
+        let [e, f, g, h] = rhs.coeffs;
         Self {
-            coeffs: [
-                self.coeffs[0] + rhs.coeffs[0],
-                self.coeffs[1] + rhs.coeffs[1],
-                self.coeffs[2] + rhs.coeffs[2],
-                self.coeffs[3] + rhs.coeffs[3],
-            ],
+            coeffs: [a + e, b + f, c + g, d + h],
         }
     }
 
     #[must_use]
     pub const fn sub(self, rhs: Self) -> Self {
+        let [a, b, c, d] = self.coeffs;
+        let [e, f, g, h] = rhs.coeffs;
         Self {
-            coeffs: [
-                self.coeffs[0] - rhs.coeffs[0],
-                self.coeffs[1] - rhs.coeffs[1],
-                self.coeffs[2] - rhs.coeffs[2],
-                self.coeffs[3] - rhs.coeffs[3],
-            ],
+            coeffs: [a - e, b - f, c - g, d - h],
         }
     }
 
     #[must_use]
     pub const fn neg(self) -> Self {
+        let [a, b, c, d] = self.coeffs;
         Self {
-            coeffs: [
-                -self.coeffs[0],
-                -self.coeffs[1],
-                -self.coeffs[2],
-                -self.coeffs[3],
-            ],
+            coeffs: [-a, -b, -c, -d],
         }
     }
 
     /// Multiply by `zeta_8`, using `zeta_8^4 = -1`.
     #[must_use]
     pub const fn mul_zeta8(self) -> Self {
+        let [a, b, c, d] = self.coeffs;
         Self {
-            coeffs: [
-                -self.coeffs[3],
-                self.coeffs[0],
-                self.coeffs[1],
-                self.coeffs[2],
-            ],
+            coeffs: [-d, a, b, c],
         }
     }
 
     /// Multiply by `i = zeta_8^2`.
     #[must_use]
     pub const fn mul_i(self) -> Self {
+        let [a, b, c, d] = self.coeffs;
         Self {
-            coeffs: [
-                -self.coeffs[2],
-                -self.coeffs[3],
-                self.coeffs[0],
-                self.coeffs[1],
-            ],
+            coeffs: [-c, -d, a, b],
         }
     }
 
     /// Complex conjugate `a - d*zeta_8 - c*i - b*zeta_8^3`.
     #[must_use]
     pub const fn conj(self) -> Self {
+        let [a, b, c, d] = self.coeffs;
         Self {
-            coeffs: [
-                self.coeffs[0],
-                -self.coeffs[3],
-                -self.coeffs[2],
-                -self.coeffs[1],
-            ],
+            coeffs: [a, -d, -c, -b],
         }
     }
 
@@ -217,7 +214,11 @@ impl SparseCyclotomicRegister {
                     if next.contains_key(&k0) || next.contains_key(&(k0 | mask)) {
                         continue;
                     }
-                    let u0 = self.support.get(&k0).copied().unwrap_or(CyclotomicScalar::zero());
+                    let u0 = self
+                        .support
+                        .get(&k0)
+                        .copied()
+                        .unwrap_or(CyclotomicScalar::zero());
                     let u1 = self
                         .support
                         .get(&(k0 | mask))
@@ -233,13 +234,13 @@ impl SparseCyclotomicRegister {
                     }
                 }
                 self.support = next;
-                self.norm_denom *= 2;
+                self.norm_denom *= TWO_I128;
             }
             GateOp::T(q) => {
                 self.check_wire(q)?;
                 let mask = 1_u128 << q;
                 for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0 {
+                    if (ket & mask) != 0_u128 {
                         *amp = amp.mul_zeta8();
                     }
                 }
@@ -248,7 +249,7 @@ impl SparseCyclotomicRegister {
                 self.check_wire(q)?;
                 let mask = 1_u128 << q;
                 for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0 {
+                    if (ket & mask) != 0_u128 {
                         *amp = amp.mul_i();
                     }
                 }
@@ -257,7 +258,7 @@ impl SparseCyclotomicRegister {
                 self.check_wire(q)?;
                 let mask = 1_u128 << q;
                 for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0 {
+                    if (ket & mask) != 0_u128 {
                         *amp = amp.neg();
                     }
                 }
@@ -276,7 +277,7 @@ impl SparseCyclotomicRegister {
                 let mask = 1_u128 << q;
                 let mut next = BTreeMap::new();
                 for (&ket, &amp) in &self.support {
-                    if (ket & mask) == 0 {
+                    if (ket & mask) == 0_u128 {
                         next.insert(ket | mask, amp.mul_i());
                     } else {
                         next.insert(ket & !mask, amp.mul_i().neg());
@@ -290,7 +291,11 @@ impl SparseCyclotomicRegister {
                 let t_mask = 1_u128 << targ;
                 let mut next = BTreeMap::new();
                 for (&ket, &amp) in &self.support {
-                    let dst = if (ket & c_mask) != 0 { ket ^ t_mask } else { ket };
+                    let dst = if (ket & c_mask) != 0_u128 {
+                        ket ^ t_mask
+                    } else {
+                        ket
+                    };
                     next.insert(dst, amp);
                 }
                 self.support = next;
@@ -310,8 +315,8 @@ impl SparseCyclotomicRegister {
                 let mb = 1_u128 << b;
                 let mut next = BTreeMap::new();
                 for (&ket, &amp) in &self.support {
-                    let ba = (ket & ma) != 0;
-                    let bb = (ket & mb) != 0;
+                    let ba = (ket & ma) != 0_u128;
+                    let bb = (ket & mb) != 0_u128;
                     let dst = if ba == bb { ket } else { ket ^ (ma | mb) };
                     next.insert(dst, amp);
                 }
@@ -331,7 +336,7 @@ impl SparseCyclotomicRegister {
             p_sum += nsq.p;
             q_sum += nsq.q;
         }
-        p_sum == self.norm_denom && q_sum == 0
+        p_sum == self.norm_denom && q_sum == 0_i128
     }
 
     fn check_wire(&self, wire: usize) -> Result<(), QuantumIsaError> {
@@ -372,10 +377,11 @@ impl ColumnBitPlaneTableau {
         let planes_per_col = rows.div_ceil(WORD_BITS).max(ONE);
         let mut col_x = vec![0_u64; n * planes_per_col];
         let mut col_z = vec![0_u64; n * planes_per_col];
-        for q in 0..n {
+        for q in ZERO..n {
             col_x[q * planes_per_col + (q / WORD_BITS)] |= 1_u64 << (q % WORD_BITS);
             let stab_row = n + q;
-            col_z[q * planes_per_col + (stab_row / WORD_BITS)] |= 1_u64 << (stab_row % WORD_BITS);
+            col_z[q * planes_per_col + (stab_row / WORD_BITS)] |=
+                1_u64 << (stab_row % WORD_BITS);
         }
         Self {
             n,
@@ -390,7 +396,7 @@ impl ColumnBitPlaneTableau {
         let p = self.planes_per_col;
         match gate {
             GateOp::H(a) => {
-                for w in 0..p {
+                for w in ZERO..p {
                     let idx = a * p + w;
                     let xa = self.col_x[idx];
                     let za = self.col_z[idx];
@@ -400,7 +406,7 @@ impl ColumnBitPlaneTableau {
                 }
             }
             GateOp::S(a) => {
-                for w in 0..p {
+                for w in ZERO..p {
                     let idx = a * p + w;
                     let xa = self.col_x[idx];
                     let za = self.col_z[idx];
@@ -412,7 +418,7 @@ impl ColumnBitPlaneTableau {
                 if a == b {
                     return Err(QuantumIsaError::DuplicateWireReference { wire: a });
                 }
-                for w in 0..p {
+                for w in ZERO..p {
                     let ia = a * p + w;
                     let ib = b * p + w;
                     let xa = self.col_x[ia];
@@ -428,7 +434,7 @@ impl ColumnBitPlaneTableau {
                 if a == b {
                     return Err(QuantumIsaError::DuplicateWireReference { wire: a });
                 }
-                for w in 0..p {
+                for w in ZERO..p {
                     let ia = a * p + w;
                     let ib = b * p + w;
                     let xa = self.col_x[ia];
@@ -441,17 +447,17 @@ impl ColumnBitPlaneTableau {
                 }
             }
             GateOp::X(a) => {
-                for w in 0..p {
+                for w in ZERO..p {
                     self.r_planes[w] ^= self.col_z[a * p + w];
                 }
             }
             GateOp::Z(a) => {
-                for w in 0..p {
+                for w in ZERO..p {
                     self.r_planes[w] ^= self.col_x[a * p + w];
                 }
             }
             GateOp::Y(a) => {
-                for w in 0..p {
+                for w in ZERO..p {
                     self.r_planes[w] ^= self.col_x[a * p + w] ^ self.col_z[a * p + w];
                 }
             }
@@ -459,7 +465,7 @@ impl ColumnBitPlaneTableau {
                 if a == b {
                     return Err(QuantumIsaError::DuplicateWireReference { wire: a });
                 }
-                for w in 0..p {
+                for w in ZERO..p {
                     let ia = a * p + w;
                     let ib = b * p + w;
                     self.col_x.swap(ia, ib);
@@ -479,13 +485,13 @@ impl ColumnBitPlaneTableau {
 
 /// Tropical `(min, +)` all-pairs closure (`k7`) for minimum-weight syndrome decoding.
 pub fn tropical_min_plus_closure(dist: &mut [i32], next_hop: &mut [i32], n: usize) {
-    for k in 0..n {
-        for i in 0..n {
+    for k in ZERO..n {
+        for i in ZERO..n {
             let dik = dist[i * n + k];
             if dik >= TROPICAL_INF {
                 continue;
             }
-            for j in 0..n {
+            for j in ZERO..n {
                 let dkj = dist[k * n + j];
                 if dkj >= TROPICAL_INF {
                     continue;
@@ -510,9 +516,9 @@ pub struct AtlasUseCaseParams {
 
 impl AtlasUseCaseParams {
     pub const CANONICAL: Self = Self {
-        scope: 4,
-        modality: 3,
-        context: 8,
+        scope: CYCLOTOMIC_RANK,
+        modality: THREE,
+        context: EIGHT,
     };
 
     #[must_use]

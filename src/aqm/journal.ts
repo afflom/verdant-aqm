@@ -59,11 +59,19 @@ import {
   ConservationReport,
   EntanglementEdge,
   ForcedCollapseBranch,
+  GateKind,
   ModeledAqmError,
 } from './types';
+import {
+  compressUorcPortable,
+  decodeSnapshotUrlHash,
+  decompressUorcPortable,
+  encodeUorcSnapshotArchive,
+  isUorcArchive,
+} from './uorc';
 
-/** Interactive rollback journal supports up to 256 reversible/journaled frames */
-const INTERACTIVE_SESSION_MAX_STEPS = pow2Constructive(EIGHT);
+/** Target full-inspection checkpoint density for unbounded rollback journals (zero step truncation) */
+const ADAPTIVE_CHECKPOINT_TARGET_FRAMES = EIGHT * EIGHT;
 
 export interface JournalEntry {
   readonly frameIndex: number;
@@ -247,7 +255,7 @@ export function executeCircuitRollbackSession(
     return compiled;
   }
 
-  const maxSteps = Math.min(spec.steps.length, INTERACTIVE_SESSION_MAX_STEPS);
+  const totalSteps = spec.steps.length;
   let chainTip = sha256Hex(
     `VDNT-GENESIS:${spec.name}:n=${spec.qubitCount}:seed=${spec.seed}:backend=${spec.backend}`,
   );
@@ -255,18 +263,27 @@ export function executeCircuitRollbackSession(
   const frames: AqmFrameSnapshot[] = [];
   const journal: JournalEntry[] = [];
 
-  // For megascale circuits (n > 24 and steps > 32), compute lightweight intermediate frames and full initial + terminal inspection
-  const lightweightIntermediate = spec.qubitCount > THREE * EIGHT && maxSteps > THIRTY_TWO;
+  // Adaptive inspection stride: zero step truncation for 1,000+ or 10,000+ gate circuits while keeping intermediate inspection O(1) amortized
+  const lightweightIntermediate =
+    (spec.qubitCount > THREE * EIGHT && totalSteps > THIRTY_TWO) ||
+    totalSteps > ADAPTIVE_CHECKPOINT_TARGET_FRAMES * FOUR;
+  const inspectStride = lightweightIntermediate
+    ? Math.max(EIGHT, Math.ceil(totalSteps / ADAPTIVE_CHECKPOINT_TARGET_FRAMES))
+    : ONE;
 
   if (spec.backend === AqmBackendMode.CyclotomicExact) {
     let curState = createInitialCyclotomicState(spec.qubitCount);
     const genesisFrame = buildFrameFromCyclotomic(ZERO, chainTip, curState);
     frames.push(genesisFrame);
 
-    for (let i = ZERO; i < maxSteps; i += ONE) {
+    for (let i = ZERO; i < totalSteps; i += ONE) {
       const step = spec.steps[i];
       const draw = deterministicBornDraw(spec.seed, i, step.targets[ZERO]);
-      const fullInspectStep = !lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO;
+      const fullInspectStep =
+        !lightweightIntermediate ||
+        i === totalSteps - ONE ||
+        step.kind === GateKind.MEASURE ||
+        i % inspectStride === ZERO;
       const res = stepCyclotomicGate(curState, step, draw, {
         skipBondRanks: !fullInspectStep,
         skipTelemetryAppend: !fullInspectStep,
@@ -288,7 +305,7 @@ export function executeCircuitRollbackSession(
         chainDigest: chainTip,
         measurement: res.measurementOutcome,
       });
-      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+      if (fullInspectStep) {
         frames.push(buildFrameFromCyclotomic(i + ONE, chainTip, curState));
       } else {
         frames.push({
@@ -304,9 +321,14 @@ export function executeCircuitRollbackSession(
     let curMps = createInitialExactMps(spec.qubitCount);
     frames.push(buildFrameFromMps(ZERO, chainTip, curMps));
 
-    for (let i = ZERO; i < maxSteps; i += ONE) {
+    for (let i = ZERO; i < totalSteps; i += ONE) {
       const step = spec.steps[i];
       const draw = deterministicBornDraw(spec.seed, i, step.targets[ZERO]);
+      const fullInspectStep =
+        !lightweightIntermediate ||
+        i === totalSteps - ONE ||
+        step.kind === GateKind.MEASURE ||
+        i % inspectStride === ZERO;
       const res = stepExactMpsGate(curMps, step, draw);
       curMps = res.nextState;
 
@@ -325,7 +347,7 @@ export function executeCircuitRollbackSession(
         chainDigest: chainTip,
         measurement: res.measurementOutcome,
       });
-      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+      if (fullInspectStep) {
         frames.push(buildFrameFromMps(i + ONE, chainTip, curMps));
       } else {
         frames.push({
@@ -340,9 +362,14 @@ export function executeCircuitRollbackSession(
     let curTab = createInitialTableau(spec.qubitCount);
     frames.push(buildFrameFromTableau(ZERO, chainTip, curTab));
 
-    for (let i = ZERO; i < maxSteps; i += ONE) {
+    for (let i = ZERO; i < totalSteps; i += ONE) {
       const step = spec.steps[i];
       const draw = deterministicBornDraw(spec.seed, i, step.targets[ZERO]);
+      const fullInspectStep =
+        !lightweightIntermediate ||
+        i === totalSteps - ONE ||
+        step.kind === GateKind.MEASURE ||
+        i % inspectStride === ZERO;
       const res = stepStabilizerTableau(curTab, step, draw);
       curTab = res.nextTableau;
 
@@ -361,7 +388,7 @@ export function executeCircuitRollbackSession(
         chainDigest: chainTip,
         measurement: res.measurementOutcome,
       });
-      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+      if (fullInspectStep) {
         frames.push(buildFrameFromTableau(i + ONE, chainTip, curTab));
       } else {
         frames.push({
@@ -377,8 +404,10 @@ export function executeCircuitRollbackSession(
     const cache = new Set<string>();
     frames.push(buildFrameFromAtlas(ZERO, chainTip, curAtlas));
 
-    for (let i = ZERO; i < maxSteps; i += ONE) {
+    for (let i = ZERO; i < totalSteps; i += ONE) {
       const step = spec.steps[i];
+      const fullInspectStep =
+        !lightweightIntermediate || i === totalSteps - ONE || i % inspectStride === ZERO;
       const res = stepAtlasHolospace(curAtlas, step, cache);
       curAtlas = res.nextState;
 
@@ -394,7 +423,7 @@ export function executeCircuitRollbackSession(
         prevChainDigest: prevDigest,
         chainDigest: chainTip,
       });
-      if (!lightweightIntermediate || i === maxSteps - ONE || i % EIGHT === ZERO) {
+      if (fullInspectStep) {
         frames.push(buildFrameFromAtlas(i + ONE, chainTip, curAtlas));
       } else {
         frames.push({
@@ -459,6 +488,13 @@ export interface VdntSnapshotEnvelope {
   readonly cursor: number;
 }
 
+/**
+ * Pure `UORC` (`b"UORC"` + 32B SHA-256 seal) `#uorc=<base64url>` snapshot encoder (`VE-36` / `AQ-22`).
+ */
+export function encodeUorcSnapshotToken(envelope: VdntSnapshotEnvelope): string {
+  return encodeUorcSnapshotArchive(envelope).urlToken;
+}
+
 export function encodeVdntSnapshotToken(envelope: VdntSnapshotEnvelope): string {
   const jsonBytes = new TextEncoder().encode(JSON.stringify(envelope));
   if (jsonBytes.byteLength > SNAPSHOT_URL_MAX_BYTES) {
@@ -471,26 +507,11 @@ export function encodeVdntSnapshotToken(envelope: VdntSnapshotEnvelope): string 
 
 export function decodeVdntSnapshotToken(
   token: string,
-): { ok: true; value: VdntSnapshotEnvelope } | { ok: false; reason: string } {
-  const cleaned = token.startsWith('#vdnt=') ? token.slice('#vdnt='.length) : token;
-  const parts = cleaned.split('.');
-  if (parts.length !== THREE || parts[ZERO] !== 'VDNT1') {
-    return { ok: false, reason: 'Invalid VDNT1 header prefix' };
-  }
-  const expectedTag = sha256Hex(`VDNT1.${parts[ONE]}`).slice(ZERO, SIXTEEN);
-  if (parts[TWO] !== expectedTag) {
-    return { ok: false, reason: 'VDNT SHA-256 integrity tag mismatch' };
-  }
-  try {
-    const raw = fromBase64Url(parts[ONE]);
-    const parsed = JSON.parse(new TextDecoder().decode(raw)) as VdntSnapshotEnvelope;
-    if (!parsed || typeof parsed.cursor !== 'number' || !parsed.spec) {
-      return { ok: false, reason: 'Malformed VDNT payload schema' };
-    }
-    return { ok: true, value: parsed };
-  } catch {
-    return { ok: false, reason: 'Failed to decode base64url VDNT payload' };
-  }
+): { ok: true; scheme?: 'uorc' | 'vdnt-legacy'; value: VdntSnapshotEnvelope } | { ok: false; reason: string } {
+  const res = decodeSnapshotUrlHash(token);
+  if (!res.ok) return res;
+  void fromBase64Url;
+  return { ok: true, scheme: res.scheme, value: res.value };
 }
 
 /**
@@ -590,17 +611,18 @@ export function packProgressiveUorcStream(
     const bodyBytes = new TextEncoder().encode(
       JSON.stringify({ chain: 'UORC-SHA256-CHAIN-v1', lod: item.lod, prevHash, data: item.data }),
     );
-    const frameHash = bytesToHex(sha256Bytes(bodyBytes));
+    const uorcArchive = compressUorcPortable(bodyBytes);
+    const frameHash = bytesToHex(sha256Bytes(uorcArchive));
     out.push({
       lod: item.lod,
       name: item.name,
       workUnits: item.workUnits,
       lossless: item.lossless,
-      byteLength: bodyBytes.byteLength,
+      byteLength: uorcArchive.byteLength,
       prevHash,
       frameHash,
       payloadSummary: item.summary,
-      rawBytes: bodyBytes,
+      rawBytes: uorcArchive,
     });
     prevHash = frameHash;
   }
@@ -710,12 +732,19 @@ export function reconstructFromStitchShards(
   joined.set(r1, len);
   const trimmed = joined.subarray(ZERO, bundle.originalByteLength);
   const reconstructedSha256 = bytesToHex(sha256Bytes(trimmed));
-  const integrityVerified = reconstructedSha256 === bundle.originalSha256;
+  const outerMatches = reconstructedSha256 === bundle.originalSha256;
+  const innerUorcValid = isUorcArchive(trimmed) ? decompressUorcPortable(trimmed).ok : true;
+  const integrityVerified = outerMatches && innerUorcValid;
 
   return {
     ok: integrityVerified,
     reconstructedSha256,
     integrityVerified,
     bytes: new Uint8Array(trimmed),
+    reason: !outerMatches
+      ? 'Outer Stitch SHA-256 digest mismatch.'
+      : !innerUorcValid
+        ? 'Inner UORC 32-byte SHA-256 seal mismatch.'
+        : undefined,
   };
 }

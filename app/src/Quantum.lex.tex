@@ -342,6 +342,123 @@ theorem{
   axioms: []
 }
 
+definition{
+  name: affineMeasurementOutcome,
+  parameters: [baseSign : Bool, coinParity : Bool],
+  result: Bool,
+  body: (xor baseSign coinParity),
+  axioms: []
+}
+
+theorem{
+  name: inv013AffineStabilizerFrameExact,
+  statement: ((((affineMeasurementOutcome false false) = false)
+    ∧ ((affineMeasurementOutcome false true) = true))
+    ∧ (((affineMeasurementOutcome true false) = true)
+      ∧ ((affineMeasurementOutcome true true) = false))),
+  proof: decide{},
+  axioms: []
+}
+
+inductive{
+  name: UorcExemptionKind,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: nonePostBootMandatory, fields: []},
+    {name: coldBootHttpAndHolo, fields: []},
+    {name: coreWasmBoundedTextVerifier, fields: []},
+    {name: hostStandardInteropArtifact, fields: []}
+  ]
+}
+
+definition{
+  name: uorcExemptionActive,
+  parameters: [ex : UorcExemptionKind],
+  result: Bool,
+  body: (match ex
+    | UorcExemptionKind.nonePostBootMandatory => false
+    | _ => true),
+  axioms: []
+}
+
+definition{
+  name: uorcTransportMandatory,
+  parameters: [ex : UorcExemptionKind, payloadIsUorc : Bool, sealVerified : Bool],
+  result: Bool,
+  body: (if (uorcExemptionActive ex) then true else (payloadIsUorc && sealVerified)),
+  axioms: []
+}
+
+definition{
+  name: uorcCompressionGainValid,
+  parameters: [uorcBytes : Nat, rawBytes : Nat, lossless : Bool],
+  result: Bool,
+  body: (lossless && ((uorcBytes <=? rawBytes) && (0 <? uorcBytes))),
+  axioms: []
+}
+
+theorem{
+  name: inv014UniversalUorcExclusiveRuntime,
+  statement: ((((uorcTransportMandatory UorcExemptionKind.coldBootHttpAndHolo false false) = true)
+    ∧ ((uorcTransportMandatory UorcExemptionKind.nonePostBootMandatory true true) = true))
+    ∧ (((uorcTransportMandatory UorcExemptionKind.nonePostBootMandatory false true) = false)
+      ∧ ((uorcTransportMandatory UorcExemptionKind.nonePostBootMandatory true false) = false))),
+  proof: decide{},
+  axioms: []
+}
+
+structure{
+  name: ParametricRatchetCeilingsSpec,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: maxOntologyRootLiteralGtOne, type: Nat},
+    {name: maxOntologyRootStringField, type: Nat},
+    {name: maxClassicalChoice, type: Nat},
+    {name: maxUngroundedLexModule, type: Nat},
+    {name: maxDomainLexMagicLiteral, type: Nat},
+    {name: maxEngineRustMagicLiteral, type: Nat}
+  ]
+}
+
+definition{
+  name: ratchetCeilingsStrictlyZero,
+  parameters: [c : ParametricRatchetCeilingsSpec],
+  result: Bool,
+  body: ((((((project c maxOntologyRootLiteralGtOne) =? 0)
+    && ((project c maxOntologyRootStringField) =? 0))
+    && ((project c maxClassicalChoice) =? 0))
+    && ((project c maxUngroundedLexModule) =? 0))
+    && (((project c maxDomainLexMagicLiteral) =? 0)
+      && ((project c maxEngineRustMagicLiteral) =? 0))),
+  axioms: []
+}
+
+theorem{
+  name: inv015ParametricRatchetZeroCeilings,
+  statement: (((ratchetCeilingsStrictlyZero
+      (record ParametricRatchetCeilingsSpec {
+        maxOntologyRootLiteralGtOne := 0,
+        maxOntologyRootStringField := 0,
+        maxClassicalChoice := 0,
+        maxUngroundedLexModule := 0,
+        maxDomainLexMagicLiteral := 0,
+        maxEngineRustMagicLiteral := 0
+      })) = true)
+    ∧ ((ratchetCeilingsStrictlyZero
+      (record ParametricRatchetCeilingsSpec {
+        maxOntologyRootLiteralGtOne := 0,
+        maxOntologyRootStringField := 0,
+        maxClassicalChoice := 0,
+        maxUngroundedLexModule := 0,
+        maxDomainLexMagicLiteral := 0,
+        maxEngineRustMagicLiteral := 1
+      })) = false)),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}
 

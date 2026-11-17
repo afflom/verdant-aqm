@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ALL_CAPABILITY_IDS,
   CANONICAL_NOTEBOOK_SPECS,
   DIATAXIS_GUIDE_META,
   buildJupyterNotebookJson,
@@ -58,7 +59,7 @@ export function generateAllJupyterNotebooks(outDirArg = 'notebooks', cwd = proce
   }
 
   console.log(
-    `generate-notebooks: emitted ${writtenFiles.length} verified .ipynb notebooks in ${outDir} · prism-devrel gate=${audit.gateVerdict} (${audit.coveredCapabilities.length}/21 capabilities, 0 filler words)`,
+    `generate-notebooks: emitted ${writtenFiles.length} verified .ipynb notebooks in ${outDir} · prism-devrel gate=${audit.gateVerdict} (${audit.coveredCapabilities.length}/${ALL_CAPABILITY_IDS.length} capabilities, 0 filler words)`,
   );
 
   return {

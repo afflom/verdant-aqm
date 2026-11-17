@@ -1,0 +1,131 @@
+\begin{lexlean}{Foundation.Ontology.V1.Model}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\title{Constructive {0, 1} arithmetic, prime generators, W5H certificates, and 8-stratum obstruction calculus}
+
+\begin{semanticmodule}
+
+structure{
+  name: ParametricQuantumCoordinates,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: lodTargetRank, type: Nat},
+    {name: qubitRegisterWidth, type: Nat},
+    {name: mpsBondRank, type: Nat},
+    {name: surfaceCodeDistance, type: Nat},
+    {name: symplecticWordPlanes, type: Nat},
+    {name: accumulatorBits, type: Nat}
+  ]
+}
+
+structure{
+  name: W5HCertificate,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: whatIntrinsicPrime, type: Nat},
+    {name: whatCompositeUorSig, type: Nat},
+    {name: whyStratumRank, type: Nat},
+    {name: whyObstructionWithout, type: Bool},
+    {name: whyObstructionResolved, type: Bool},
+    {name: whoAgencyPrimeProduct, type: Nat},
+    {name: whereBoundaryPole, type: Nat},
+    {name: whereStructuralArity, type: Nat},
+    {name: whenTemporalRegime, type: Nat},
+    {name: howLogosVerified, type: Bool}
+  ]
+}
+
+definition{
+  name: distinctionBitsForCardinality,
+  parameters: [cardinality : Nat],
+  result: Nat,
+  body: (if (cardinality <=? 1) then 0 else (cardinality - 1)),
+  axioms: []
+}
+
+definition{
+  name: pow2Step,
+  parameters: [exp : Nat, acc : Nat],
+  result: Nat,
+  body: (match exp
+    | Nat.zero => acc
+    | Nat.succ k => (pow2Step k ((1 + 1) * acc))),
+  axioms: [],
+  recursive_argument: exp
+}
+
+definition{
+  name: pow2Constructive,
+  parameters: [exp : Nat],
+  result: Nat,
+  body: (pow2Step exp 1),
+  axioms: []
+}
+
+definition{
+  name: bitMaskConstructive,
+  parameters: [bits : Nat],
+  result: Nat,
+  body: ((pow2Constructive bits) - 1),
+  axioms: []
+}
+
+definition{
+  name: fibPairStep,
+  parameters: [fuel : Nat, a : Nat, b : Nat],
+  result: Nat,
+  body: (match fuel
+    | Nat.zero => a
+    | Nat.succ rest => (fibPairStep rest b (a + b))),
+  axioms: [],
+  recursive_argument: fuel
+}
+
+definition{
+  name: fibonacciConstructive,
+  parameters: [index : Nat],
+  result: Nat,
+  body: (fibPairStep index 0 1),
+  axioms: []
+}
+
+definition{
+  name: hasDivisorFrom,
+  parameters: [n : Nat, d : Nat, fuel : Nat],
+  result: Bool,
+  body: (match fuel
+    | Nat.zero => false
+    | Nat.succ rest =>
+        (if (n <? (d * d))
+          then false
+          else (if ((n % d) =? 0)
+            then true
+            else (hasDivisorFrom n (d + 1) rest)))),
+  axioms: [],
+  recursive_argument: fuel
+}
+
+definition{
+  name: isPrimeConstructive,
+  parameters: [n : Nat],
+  result: Bool,
+  body: (if (n <=? 1)
+    then false
+    else (not (hasDivisorFrom n (1 + 1) n))),
+  axioms: []
+}
+
+theorem{
+  name: constructiveZeroOneBasisHolds,
+  statement: ((((pow2Constructive 0) = 1)
+    ∧ ((pow2Constructive (1 + 1)) = ((1 + 1) * (1 + 1))))
+    ∧ (((isPrimeConstructive (1 + 1)) = true)
+      ∧ ((isPrimeConstructive ((1 + 1) * (1 + 1))) = false))),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

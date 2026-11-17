@@ -1,0 +1,62 @@
+\begin{lexlean}{Foundation.Bytes}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\importmodule{Foundation.Ontology.V1.Model}
+\title{Bounded deterministic byte slices, UORC archive framing, and ordering primitives without non-constructive choice axioms}
+
+\begin{semanticmodule}
+
+structure{
+  name: BoundedBufferSpec,
+  type_parameters: [],
+  parameters: [],
+  fields: [
+    {name: byteLength, type: Nat},
+    {name: capacityCeiling, type: Nat},
+    {name: withinBounds, type: Bool}
+  ]
+}
+
+definition{
+  name: boundedSliceAdmissible,
+  parameters: [byteLength : Nat, capacityCeiling : Nat],
+  result: Bool,
+  body: (byteLength <=? capacityCeiling),
+  axioms: []
+}
+
+definition{
+  name: uorcHeaderMagicLen,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (1 + 1)),
+  axioms: []
+}
+
+definition{
+  name: sha256SealBytesLen,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (((1 + 1) + (1 + 1)) + 1)),
+  axioms: []
+}
+
+definition{
+  name: uorcArchiveMinBytes,
+  parameters: [],
+  result: Nat,
+  body: ((uorcHeaderMagicLen) + (sha256SealBytesLen)),
+  axioms: []
+}
+
+theorem{
+  name: boundedBytesAndUorcFrameValid,
+  statement: ((((boundedSliceAdmissible 0 1) = true)
+    ∧ ((boundedSliceAdmissible (1 + 1) 1) = false))
+    ∧ ((1 <? (uorcArchiveMinBytes)) = true)),
+  proof: decide{},
+  axioms: []
+}
+
+\end{semanticmodule}
+\end{lexlean}

@@ -8,9 +8,9 @@ Classical dense state-vector simulators allocate $2^n$ complex numbers ($16 \tim
 
 | Circuit Structure | Selected Prism Substrate | Scaling Law | Representative Regime |
 | :--- | :--- | :--- | :--- |
-| Pure Clifford (`h, s, sdg, sx, x, y, z, cx, cz, swap, ecr`) | `StabilizerTableau` (`AQ-04`) | $\mathcal{O}(n^2 / 32)$ packed bit-planes | `2,048+` qubits in milliseconds |
-| Clifford + $T$ / Toffoli / Fredkin (`t, tdg, ch, ccx, cswap`) | `CyclotomicExact` (`AQ-03`) | $\mathcal{O}(|\text{supp}(\psi)|)$ in $\mathbb{Z}[\zeta_8]$ | `4,096+` qubits on sparse-ket manifolds |
-| Low-entanglement 1D tensor chains | `ExactMps` (`AQ-14`) | $\mathcal{O}(n \cdot \chi^2)$ over $\mathbb{Q}(\zeta_8)$ | Exact rational RREF bond truncation |
+| Pure Clifford + mid-circuit `measure` / `reset` (`h, s, sdg, sx, x, y, z, cx, cz, swap, ecr`) | `StabilizerTableau` (`AQ-04`) | $\mathcal{O}(n^2 / 32)$ bit-planes & $\mathcal{O}(\text{gates})$ adjoint Pauli | `2,048+` qubits sampling; `100,000+` qubits `EstimatorV2` |
+| Sparse-support Clifford + $T$ / Toffoli / Fredkin (`t, tdg, ch, ccx, cswap`) | `CyclotomicExact` (`AQ-03`) | $\mathcal{O}(|\text{supp}(\psi)|)$ in $\mathbb{Z}[\zeta_8]$ | `4,096+` qubits on sparse-ket manifolds |
+| Wide dense-superposition 1D non-Clifford chains (`branching > 16`, local span) | `ExactMps` (`AQ-14`) | $\mathcal{O}(n \cdot \chi^3)$ over $\mathbb{Q}(\zeta_8)$ | `64+` qubits at full $2^{64}$ basis-ket support |
 | Continuous rotations (`rx, ry, rz, p, u, rxx, rzz`) | `ExactSparseContinuum` + `AtlasHolospace` (`AQ-16`, `AQ-20`) | $\mathcal{O}(|\text{supp}(\psi)|)$ `BigInt`-indexed kets | `< 1e-12` VQE & QAOA expectations |
 
 ## Task 1: Replace `BasicSimulator` or `AerSimulator` in Existing Qiskit Code

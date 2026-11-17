@@ -20,9 +20,10 @@ QuantumCircuit / PUBs (Qiskit BackendV2 · SamplerV2 · EstimatorV2)
         │
         ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│  Prism Invariant Guard (AQ-01, AQ-02, AQ-15, AQ-17, AQ-19..AQ-21)  │
+│  Prism Invariant Guard (AQ-01, AQ-02, AQ-15, AQ-17, AQ-19..AQ-23)  │
 │  - Unbounded Target (num_qubits = None, coupling_map = None)       │
 │  - No-Cloning Wire Linearity & Z_8 Phase-Monoid Gate Fusion        │
+│  - Pure UORC Post-Boot Wire (VE-36) & Parametric Ratchet (FI-08)   │
 └───────┬────────────────────┬───────────────────┬───────────────────┘
         │                    │                   │
         ▼                    ▼                   ▼
@@ -35,7 +36,7 @@ QuantumCircuit / PUBs (Qiskit BackendV2 · SamplerV2 · EstimatorV2)
 
 *Figure 1: Every Qiskit circuit submitted to `VerdantAqmBackend` passes Prism wire-linearity validation before dynamic routing to the highest-performance exact algebraic or sparse-continuum substrate.*
 
-## Complete Capability Coverage Ledger (`AQ-01` – `AQ-21`)
+## Complete Capability Coverage Ledger (`AQ-01` – `AQ-23`)
 
 Every capability declared in `model/ids.toml` and `app/src/Features.lex.tex` is documented and regression-verified:
 
@@ -47,7 +48,7 @@ Every capability declared in `model/ids.toml` and `app/src/Features.lex.tex` is 
 | `AQ-04` | `symplectic_stabilizer_tableau` | 1 | Packed 32-bit column bit-plane Gottesman-Knill simulator (`stabilizer.ts`). |
 | `AQ-05` | `tropical_lightcone_and_qec` | 1 | $(\max,+)$ causal lightcones and $(\min,+)$ rotated surface-code MWPM (`tropical.ts`). |
 | `AQ-06` | `coded_zero_decode_slm_guard` | 1 | 4-bit codebook `coded_gemm` SLM router gated by Prism invariants (`slm.ts`). |
-| `AQ-07` | `reversible_measurement_journal` | 2 | SHA-256 hash-chained collapse journal and `#vdnt=` snapshot tokens (`journal.ts`). |
+| `AQ-07` | `reversible_measurement_journal` | 2 | SHA-256 hash-chained collapse journal and `#uorc=` snapshot tokens (`journal.ts`). |
 | `AQ-08` | `bloch_and_lattice_3d_manifold` | 3 | Interactive Three.js 3D Bloch manifold, surface-code pillars, and lightcones (`QuantumViewport3D.tsx`). |
 | `AQ-09` | `software_tile_raster_parity` | 3 | Deterministic $16 \times 16$ CPU software tile PBR rasterizer (`tileRasterizer.ts`). |
 | `AQ-10` | `uorc_progressive_state_lod` | 4 | Five-tier (`LOD0`–`LOD4`) progressive state streaming (`uorc.ts`). |
@@ -62,3 +63,6 @@ Every capability declared in `model/ids.toml` and `app/src/Features.lex.tex` is 
 | `AQ-19` | `qiskit_backend_v2_unbounded` | 1 | Production unbounded Qiskit `BackendV2`, `Target`, `Provider`, and `Result` (`qiskitBackend.ts`). |
 | `AQ-20` | `qiskit_primitives_v2_exact` | 1 | Exact analytical (`precision=0.0`) and shot-sampled `SamplerV2` & `EstimatorV2` (`qiskitBackend.ts`). |
 | `AQ-21` | `devrel_notebook_and_oracle_gate` | 7 | `prism-devrel` Diataxis notebooks, content checks (`CS-01..CS-11`), and Qiskit upstream oracle (`qiskitOracle.ts`). |
+| `AQ-22` | `uorc_exclusive_post_boot_wire` | 4 | Pure `UORC` post-boot wire (`b"UORC"` magic + 32B SHA-256 seal), `#uorc=` URLs, OPFS `.uorc` cache, `CDMX` zero-decode bundles, stride-8 checkpoints, and 3 explicit boundary exemptions (`uorc.ts`, `uorc_wire.py`, `uorc.rs`). |
+| `AQ-23` | `parametric_zero_constants_ratchet` | 0 | Permanent `prism/parametric-ratchet/1` (`FI-08`) enforcing all 6 zero ceilings (`0` literals `> 1`, `0` `Classical.choice`, `0` ungrounded `.lex.tex` modules) across Lean 4 and Rust (`ratchet.ts`, `parametric-ratchet.toml`). |
+

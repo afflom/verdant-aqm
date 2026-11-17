@@ -23,7 +23,9 @@ inductive{
     {name: coreWasmZeroImportWorldV1, fields: []},
     {name: qiskitBackendV2AndPrimitivesV2, fields: []},
     {name: jupyterNbformatV45Schema, fields: []},
-    {name: prismDevRelDiataxisStandard, fields: []}
+    {name: prismDevRelDiataxisStandard, fields: []},
+    {name: uorcExclusivePostBootWire, fields: []},
+    {name: fi08ParametricZeroConstantsRatchet, fields: []}
   ]
 }
 
@@ -42,14 +44,16 @@ definition{
     | NormativeObligation.coreWasmZeroImportWorldV1 => true
     | NormativeObligation.qiskitBackendV2AndPrimitivesV2 => true
     | NormativeObligation.jupyterNbformatV45Schema => true
-    | NormativeObligation.prismDevRelDiataxisStandard => true),
+    | NormativeObligation.prismDevRelDiataxisStandard => true
+    | NormativeObligation.uorcExclusivePostBootWire => true
+    | NormativeObligation.fi08ParametricZeroConstantsRatchet => true),
   axioms: []
 }
 
 theorem{
   name: everyObligationEvidenced,
-  statement: ((((obligationEvidenced NormativeObligation.blake3HoloV4ContentAddressing) = true)
-    ∧ ((obligationEvidenced NormativeObligation.coreWasmZeroImportWorldV1) = true))
+  statement: ((((obligationEvidenced NormativeObligation.uorcExclusivePostBootWire) = true)
+    ∧ ((obligationEvidenced NormativeObligation.fi08ParametricZeroConstantsRatchet) = true))
     ∧ ((obligationEvidenced NormativeObligation.qiskitBackendV2AndPrimitivesV2) = true)),
   proof: decide{},
   axioms: []

@@ -63,12 +63,13 @@ jobs:
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
 
-      - name: Verify TypeScript types, 8-facet Prism conformance, and 26 Wasm vectors
+      - name: Verify TypeScript types, 8-facet Prism conformance, 32 Wasm vectors & Python Qiskit oracle
         shell: bash
         run: |
           set -euo pipefail
           npm run lint
           npm test
+          npm run test:python
 
       - name: Look up this build by its input kappa
         # A VerdantAqm.holo v4 guest is a pure deterministic function of app/,
@@ -141,7 +142,7 @@ jobs:
           npx tsx bootstrap/assemble-pages.ts dist
           npx tsx bootstrap/precache.ts dist
 
-      - name: Verify assembled site integrity, 26/26 Wasm replay, and FR-03 wire-weight gate
+      - name: Verify assembled site integrity, 32/32 Wasm replay, and FR-03 wire-weight gate
         shell: bash
         run: |
           set -euo pipefail

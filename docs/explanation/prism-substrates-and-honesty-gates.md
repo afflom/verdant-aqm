@@ -22,14 +22,35 @@ For Clifford circuits, stabilizer circuits, GHZ/cat states, algebraic reversible
 
 Following `afflom/prism-devrel`, a backend must never grade its own conformance solely against hand-authored examples. `verdant-aqm` vendors upstream Qiskit test suites (`test_backend_v2.py`, `test_basic_simulator.py`, `test_backend_sampler_v2.py`, `test_backend_estimator_v2.py`) from `Qiskit/qiskit` (`c68ee295b6fa403c67216eeb0f0fbbe12cc98b28`) and locks their SHA-256 digests in `upstream.toml`. Both the TypeScript/Wasm oracle (`src/aqm/qiskitOracle.ts`) and the Python test suite (`python/qiskit-verdant-aqm/tests/test_qiskit_oracle.py`) verify these SHA-256 digests on every run before executing the 16 behavioral conformance gates.
 
+## Pure `UORC` Post-Boot Wire (`VE-36` / `AQ-22`) & Explicit Exemptions
+
+Every post-boot payload crossing a `verdant-aqm` wire, cache, or custody boundary — including `#uorc=` URL snapshots, OPFS `.uorc` cache entries, progressive `LOD0`–`LOD4` frames, Stitch 2-of-3 XOR shards, stride-8 rollback checkpoints, zero-decode `CDMX` `CodedMatrix` bundles, and serialized Qiskit `Result` archives — is framed in a self-delimiting `b"UORC"` container sealed by a trailing 32-byte FIPS 180-4 SHA-256 digest across Rust (`crates/verdant-aqm/src/uorc.rs`), TypeScript (`src/aqm/uorc.ts`), and Python (`qiskit_verdant_aqm/uorc_wire.py`).
+
+Three explicit architectural boundaries are modeled in `Quantum.lex.tex::UorcExemptionKind` rather than bypassed ad hoc:
+
+1. **`cold-boot-http-holo`:** Initial cold-boot HTML/CSS/JS assets and `VerdantAqm.holo` (`app.holo` v4, sealed by its own 32-byte BLAKE3 footer).
+2. **`core-wasm-verifier-64b`:** Bounded UTF-8 verification queries (`<= 64` bytes on `holo_run`) crossing the zero-import `hologram:guest/core-wasm@1` sandbox.
+3. **`host-standard-interop`:** Standard external scientific ecosystems (`nbformat` v4.5 `.ipynb` notebooks, in-memory Qiskit Python objects, and SHA-256-locked `vendor/qiskit-oracle/` files).
+
+## Permanent Zero-Constants Parametric Ratchet (`FI-08` / `AQ-23`)
+
+`model/parametric-ratchet.toml` (`spec = "prism/parametric-ratchet/1"`) locks six permanent zero ceilings across all 10 Lean 4 `.lex.tex` modules (`app/src/**/*.lex.tex`) and all Rust engine sources (`crates/verdant-aqm/src/**/*.rs`):
+
+- `max_ontology_root_literal_gt_one_count = 0` and `max_ontology_root_string_field_count = 0`
+- `max_classical_choice_count = 0` and `max_ungrounded_lex_module_count = 0`
+- `max_domain_lex_magic_literal_count = 0` and `max_engine_rust_magic_literal_count = 0`
+
+Every Hilbert dimension, bit-width, stride, magic byte, and SHA-256 round constant is derived constructively from `{0, 1}`. Any literal `> 1`, any `Classical.choice` reference, any ungrounded `.lex.tex` file, or any attempt to raise a ceiling above `0` fails `npm run ratchet` and `npm run verify:pages`.
+
 ## `Honesty.lex.tex` Three-Tier Claim Ledger & `devrel-publish-gate`
 
 Per `Honesty.lex.tex` and `devrel-publish-gate.prompt.json`:
 
 | Ledger Bucket | Meaning | `verdant-aqm` Scope |
 | :--- | :--- | :--- |
-| `some-true` | Proved constructively inside the Prism model | Wire linearity, $\mathbb{Z}[\zeta_8]$ norm preservation, $\mathbb{Z}_8$ fusion monoid, $\mathbb{F}_2$ symplectic commutativity, unbounded `Target` contract, and `evaluateDevRelPublishGate` totality. |
-| `build` | Verified empirically by deterministic runtime & oracle vectors | 32 `holo_run` Wasm vectors, 11 planted-defect refusal gates, 16 upstream Qiskit oracle cases, `CS-01..CS-11` prose checks, and `.ipynb` notebook parity. |
+| `some-true` | Proved constructively inside the Prism model | Wire linearity, $\mathbb{Z}[\zeta_8]$ norm preservation, $\mathbb{Z}_8$ fusion monoid, $\mathbb{F}_2$ symplectic commutativity, unbounded `Target` contract, `uorcTransportMandatory` exemptions, and `evaluateDevRelPublishGate` totality. |
+| `build` | Verified empirically by deterministic runtime & oracle vectors | 36 `holo_run` Wasm vectors, 13 planted-defect refusal gates, 16 upstream Qiskit oracle cases, `prism/parametric-ratchet/1` 6-ceiling audit, `CS-01..CS-11` prose checks, and `.ipynb` notebook parity. |
 | `open` | Explicitly out-of-scope or bounded by theoretical complexity | Physical QPU execution, cloud API transport, and worst-case dense Haar-random non-Clifford circuits at high $T$-rank where $|\text{supp}(\psi)|$ grows exponentially. |
 
-`evaluateDevRelPublishGate(uncovered, undeclared, unverifiedNotebooks, pin)` emits `publish` only when every capability `AQ-01..AQ-21` is documented (`uncovered == 0`), zero unmodeled claims appear (`undeclared == 0`), every `.ipynb` cell executes cleanly (`unverifiedNotebooks == 0`), and `upstream.toml` SHA-256 hashes match (`pin == current`).
+`evaluateDevRelPublishGate(uncovered, undeclared, unverifiedNotebooks, pin)` emits `publish` only when every capability `AQ-01..AQ-23` is documented (`uncovered == 0`), zero unmodeled claims appear (`undeclared == 0`), every `.ipynb` cell executes cleanly (`unverifiedNotebooks == 0`), and `upstream.toml` SHA-256 hashes match (`pin == current`).
+

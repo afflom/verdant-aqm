@@ -495,6 +495,124 @@ export function columnPlanesToSymplecticTableau(colTab: ColumnBitPlaneTableau): 
   return { n, wordsPerRow, xWords, zWords, r, collapsedWires: new Map() };
 }
 
+export interface AffineMeasurementWireLaw {
+  readonly baseBit: 0 | 1;
+  readonly coinMask: bigint;
+}
+
+export interface AffineStabilizerFrame {
+  readonly numCoins: number;
+  readonly wireLaws: ReadonlyMap<number, AffineMeasurementWireLaw>;
+  readonly tableau: SymplecticTableau;
+}
+
+export function parityBigInt(x: bigint): 0 | 1 {
+  let v = x;
+  let p = 0;
+  while (v !== ZERO_BIG) {
+    v &= v - ONE_BIG;
+    p ^= ONE;
+  }
+  return p === ONE ? ONE : ZERO;
+}
+
+/**
+ * Compiles projective Z-basis measurements on `measuredWires` into an exact F_2-affine
+ * measurement frame (`Quantum.lex.tex :: inv013AffineStabilizerFrameExact`) in a SINGLE pass!
+ *
+ * Eliminates classical per-shot tableau cloning and O(shots * n^2) Gaussian elimination:
+ * once compiled, any number of shots (and exact analytical probabilities) evaluate in O(1)
+ * bitwise XORs per measured wire.
+ */
+export function compileAffineStabilizerMeasurementFrame(
+  colTab: ColumnBitPlaneTableau,
+  measuredWires: readonly number[],
+): AffineStabilizerFrame {
+  const tab = columnPlanesToSymplecticTableau(colTab);
+  const { n, wordsPerRow, xWords, zWords, r } = tab;
+  const rows = TWO * n;
+  const lastMask = makeLastWordMask(n);
+  const coinMasks: bigint[] = new Array<bigint>(rows).fill(ZERO_BIG);
+  const wireLaws = new Map<number, AffineMeasurementWireLaw>();
+  let numCoins = ZERO;
+
+  for (const a of measuredWires) {
+    if (wireLaws.has(a)) continue;
+    const wA = a >>> 6;
+    const mA = ONE_BIG << BigInt(a & 63);
+
+    let pRow = -ONE;
+    for (let p = n; p < rows; p += ONE) {
+      if ((xWords[p * wordsPerRow + wA] & mA) !== ZERO_BIG) {
+        pRow = p;
+        break;
+      }
+    }
+
+    if (pRow >= ZERO) {
+      for (let i = ZERO; i < rows; i += ONE) {
+        if (i !== pRow && i !== pRow - n && (xWords[i * wordsPerRow + wA] & mA) !== ZERO_BIG) {
+          rowsumPacked(wordsPerRow, lastMask, xWords, zWords, r, i, pRow);
+          coinMasks[i] ^= coinMasks[pRow];
+        }
+      }
+      const dstRow = pRow - n;
+      const dstOff = dstRow * wordsPerRow;
+      const srcOff = pRow * wordsPerRow;
+      for (let w = ZERO; w < wordsPerRow; w += ONE) {
+        xWords[dstOff + w] = xWords[srcOff + w];
+        zWords[dstOff + w] = zWords[srcOff + w];
+        xWords[srcOff + w] = ZERO_BIG;
+        zWords[srcOff + w] = ZERO_BIG;
+      }
+      r[dstRow] = r[pRow];
+      coinMasks[dstRow] = coinMasks[pRow];
+
+      zWords[srcOff + wA] = mA;
+      r[pRow] = ZERO;
+      const coinBit = ONE_BIG << BigInt(numCoins);
+      numCoins += ONE;
+      coinMasks[pRow] = coinBit;
+      wireLaws.set(a, { baseBit: ZERO, coinMask: coinBit });
+    } else {
+      const scratchX = new BigUint64Array(wordsPerRow);
+      const scratchZ = new BigUint64Array(wordsPerRow);
+      let scratchR = ZERO;
+      let scratchCoins = ZERO_BIG;
+
+      for (let i = ZERO; i < n; i += ONE) {
+        if ((xWords[i * wordsPerRow + wA] & mA) !== ZERO_BIG) {
+          const srcRow = i + n;
+          let acc = TWO * scratchR + TWO * r[srcRow];
+          const baseS = srcRow * wordsPerRow;
+          for (let w = ZERO; w < wordsPerRow; w += ONE) {
+            const mask = w === wordsPerRow - ONE ? lastMask : 0xffffffffffffffffn;
+            const x1 = xWords[baseS + w] & mask;
+            const z1 = zWords[baseS + w] & mask;
+            const x2 = scratchX[w] & mask;
+            const z2 = scratchZ[w] & mask;
+            const nx1 = (~x1) & mask;
+            const nz1 = (~z1) & mask;
+            const nx2 = (~x2) & mask;
+            const nz2 = (~z2) & mask;
+            const pos = (x1 & z1 & nx2 & z2) | (x1 & nz1 & x2 & z2) | (nx1 & z1 & x2 & nz2);
+            const neg = (x1 & z1 & x2 & nz2) | (nx1 & z1 & x2 & z2) | (x1 & nz1 & nx2 & z2);
+            acc += popcount64(pos) - popcount64(neg);
+            scratchX[w] = x2 ^ x1;
+            scratchZ[w] = z2 ^ z1;
+          }
+          const mod4 = ((acc % FOUR) + FOUR) % FOUR;
+          scratchR = mod4 === TWO ? ONE : ZERO;
+          scratchCoins ^= coinMasks[srcRow];
+        }
+      }
+      wireLaws.set(a, { baseBit: scratchR === ONE ? ONE : ZERO, coinMask: scratchCoins });
+    }
+  }
+
+  return { numCoins, wireLaws, tableau: tab };
+}
+
 /**
  * Verifies pairwise symplectic commutativity of all n active stabilizer rows [n..2n-1]
  * using 64-bit word-parallel bitwise AND/XOR + popcount!

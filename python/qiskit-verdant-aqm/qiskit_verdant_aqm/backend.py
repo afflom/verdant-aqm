@@ -14,7 +14,9 @@ Implements `AQ-19` (`qiskit_backend_v2_unbounded`):
 
 from __future__ import annotations
 
+import bisect
 import cmath
+import json
 import math
 import random
 import re
@@ -22,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from .holo_bridge import compute_job_kappa
+from .uorc_wire import compress_uorc_portable, decompress_uorc_portable
 
 try:
     from qiskit.circuit import (  # type: ignore[import-not-found]
@@ -549,18 +552,61 @@ def _z8_abs_sq(a: Z8) -> tuple[int, int]:
 
 
 def _z8_to_complex(a: Z8, k: int) -> complex:
+    # Arbitrary-depth BigInt right-shift so k > 1,075 never underflows IEEE-754 float (0.5 ** k == 0.0)!
+    half_k = k // 2
+    if half_k > 900:
+        shift = half_k - 900
+        a = (a[0] >> shift, a[1] >> shift, a[2] >> shift, a[3] >> shift)
+        half_k = 900
     s = math.sqrt(0.5)
     re = a[0] + (a[1] - a[3]) * s
     im = a[2] + (a[1] + a[3]) * s
-    scale = (0.5 ** (k // 2)) * (s if (k & 1) else 1.0)
+    scale = (0.5**half_k) * (s if (k & 1) else 1.0)
     return complex(re * scale, im * scale)
+
+
+def _z8_prob_scaled(a: Z8, k_den: int) -> float:
+    """Computes exact `|a|^2 / 2^k_den` in [0, 1] without IEEE-754 underflow/overflow at arbitrary Hadamard depth."""
+    p, q_s2 = _z8_abs_sq(a)
+    if k_den > 900:
+        shift = k_den - 900
+        return ((p >> shift) + (q_s2 >> shift) * math.sqrt(2.0)) * (0.5**900)
+    return (p + q_s2 * math.sqrt(2.0)) * (0.5**k_den)
+
+
+def _commutes_exact_steps(
+    a: tuple[str, tuple[int, ...]], b: tuple[str, tuple[int, ...]]
+) -> bool:
+    """Legal gate-commutation oracle matching `prismKernel.ts::verifyGateCommutationLegal` (`AQ-17`)."""
+    op_a, qa = a
+    op_b, qb = b
+    if set(qa).isdisjoint(qb):
+        return True
+    diag_1q = {"z", "s", "t", "_p8"}
+    if op_a in diag_1q and op_b in diag_1q and qa == qb:
+        return True
+    # Diagonal Z_8 gates commute with CX control wire and both CZ wires!
+    if op_a in diag_1q and op_b == "cx" and qa[0] == qb[0]:
+        return True
+    if op_b in diag_1q and op_a == "cx" and qb[0] == qa[0]:
+        return True
+    if op_a in diag_1q and op_b == "cz" and qa[0] in qb:
+        return True
+    if op_b in diag_1q and op_a == "cz" and qb[0] in qa:
+        return True
+    if op_a == "cz" and op_b == "cz":
+        return True
+    if op_a == "cx" and op_b == "cx" and qa[0] != qb[1] and qb[0] != qa[1]:
+        return True
+    return False
 
 
 def _decompose_exact_gate_sequence(
     instructions: Sequence[NormalizedInstruction],
     bindings: dict[str, float],
+    enable_fusion: bool = True,
 ) -> tuple[list[tuple[str, tuple[int, ...]]], int]:
-    """Decomposes Clifford+T+CCX+CSWAP gates and runs AQ-17 Z_8 phase-monoid fusion."""
+    """Decomposes Clifford+T+CCX+CSWAP gates and runs commutation-aware AQ-17 Z_8 phase-monoid fusion."""
     raw: list[tuple[str, tuple[int, ...]]] = []
 
     def push_tdg(q: int) -> None:
@@ -644,28 +690,69 @@ def _decompose_exact_gate_sequence(
         else:
             raise ValueError(f"Gate '{c}' requires continuous substrate.")
 
-    # AQ-17 Z_8 phase-monoid fusion & involution cancellation on per-wire stacks
-    phase_weight = {"z": 4, "s": 2, "t": 1}
-    fused: list[tuple[str, tuple[int, ...]]] = []
-    for op, qs in raw:
-        if op in phase_weight and fused and fused[-1][0] in phase_weight and fused[-1][1] == qs:
-            # Collapse contiguous Z/S/T runs mod 8
-            total_oct = phase_weight[op]
-            while fused and fused[-1][0] in phase_weight and fused[-1][1] == qs:
-                prev_op, _ = fused.pop()
-                total_oct = (total_oct + phase_weight[prev_op]) % 8
-            if total_oct & 4:
-                fused.append(("z", qs))
-            if total_oct & 2:
-                fused.append(("s", qs))
-            if total_oct & 1:
-                fused.append(("t", qs))
-        elif op in ("h", "x", "y", "cx", "cz", "swap") and fused and fused[-1] == (op, qs):
-            fused.pop()
-        else:
-            fused.append((op, qs))
+    if not enable_fusion:
+        return raw, 0
 
-    return fused, max(0, len(raw) - len(fused))
+    # Commutation-aware AQ-17 canonical Z_8 octant fusion & cascade involution cancellation
+    phase_weight = {"z": 4, "s": 2, "t": 1}
+    working: list[tuple[str, tuple[int, ...], int]] = []
+
+    def push_fused(op_in: str, qs_in: tuple[int, ...], oct_in: int) -> None:
+        op = "_p8" if op_in in phase_weight else op_in
+        oct_val = phase_weight[op_in] if op_in in phase_weight else oct_in
+        scan_limit = max(0, len(working) - 32)
+        for k in range(len(working) - 1, scan_limit - 1, -1):
+            prev_op, prev_qs, prev_oct = working[k]
+            if len(qs_in) == 1 and len(prev_qs) == 1 and qs_in == prev_qs:
+                if op == "_p8" and prev_op == "_p8":
+                    total_oct = (prev_oct + oct_val) % 8
+                    if total_oct == 0:
+                        tail_reinsert = working[k + 1 :]
+                        del working[k:]
+                        for t_op, t_qs, t_oct in tail_reinsert:
+                            push_fused(t_op, t_qs, t_oct)
+                    else:
+                        working[k] = ("_p8", qs_in, total_oct)
+                    return
+                if op in ("h", "x", "y") and prev_op == op:
+                    tail_reinsert = working[k + 1 :]
+                    del working[k:]
+                    for t_op, t_qs, t_oct in tail_reinsert:
+                        push_fused(t_op, t_qs, t_oct)
+                    return
+            elif len(qs_in) == 2 and len(prev_qs) == 2:
+                same_ord = qs_in == prev_qs
+                same_sym = qs_in == prev_qs or qs_in == (prev_qs[1], prev_qs[0])
+                if (op == "cx" and prev_op == "cx" and same_ord) or (
+                    op in ("cz", "swap") and prev_op == op and same_sym
+                ):
+                    tail_reinsert = working[k + 1 :]
+                    del working[k:]
+                    for t_op, t_qs, t_oct in tail_reinsert:
+                        push_fused(t_op, t_qs, t_oct)
+                    return
+
+            if not _commutes_exact_steps((prev_op, prev_qs), (op, qs_in)):
+                break
+
+        working.append((op, qs_in, oct_val))
+
+    for op_raw, qs_raw in raw:
+        push_fused(op_raw, qs_raw, 0)
+
+    expanded_out: list[tuple[str, tuple[int, ...]]] = []
+    for op_w, qs_w, oct_w in working:
+        if op_w == "_p8":
+            if oct_w & 4:
+                expanded_out.append(("z", qs_w))
+            if oct_w & 2:
+                expanded_out.append(("s", qs_w))
+            if oct_w & 1:
+                expanded_out.append(("t", qs_w))
+        else:
+            expanded_out.append((op_w, qs_w))
+
+    return expanded_out, max(0, len(raw) - len(expanded_out))
 
 
 def execute_sparse_cyclotomic(
@@ -814,106 +901,493 @@ class PackedStabilizerTableau:
             self.x_cols[a], self.x_cols[b] = self.x_cols[b], self.x_cols[a]
             self.z_cols[a], self.z_cols[b] = self.z_cols[b], self.z_cols[a]
 
-    def _row_mult(self, h: int, i: int) -> None:
-        """Multiplies generator row `h` by generator row `i` with exact mod-4 Pauli phase tracking."""
-        hb, ib = 1 << h, 1 << i
-        rh = 2 if (self.r_mask & hb) else 0
-        ri = 2 if (self.r_mask & ib) else 0
-        g_sum = 0
-        for q in range(self.num_qubits):
-            x1 = 1 if (self.x_cols[q] & ib) else 0
-            z1 = 1 if (self.z_cols[q] & ib) else 0
-            x2 = 1 if (self.x_cols[q] & hb) else 0
-            z2 = 1 if (self.z_cols[q] & hb) else 0
-            if x1 == 0 and z1 == 0:
-                pass
-            elif x1 == 1 and z1 == 1:
-                g_sum += z2 - x2
-            elif x1 == 1 and z1 == 0:
-                g_sum += z2 * (2 * x2 - 1)
+    def _compile_affine_internal(
+        self, measured_wires: Sequence[int], commit_first_outcome: int | None = None
+    ) -> tuple[int, dict[int, tuple[int, int]]]:
+        n = self.num_qubits
+        rows = 2 * n
+        full_mask = (1 << n) - 1
+        row_x = [0] * rows
+        row_z = [0] * rows
+        row_r = [1 if (self.r_mask & (1 << r)) else 0 for r in range(rows)]
+        row_coins = [0] * rows
+
+        for q in range(n):
+            q_bit = 1 << q
+            cx = self.x_cols[q]
+            while cx:
+                lb = cx & -cx
+                row_x[lb.bit_length() - 1] |= q_bit
+                cx ^= lb
+            cz = self.z_cols[q]
+            while cz:
+                lb = cz & -cz
+                row_z[lb.bit_length() - 1] |= q_bit
+                cz ^= lb
+
+        def rowsum(h: int, i: int) -> None:
+            x1, z1 = row_x[i], row_z[i]
+            x2, z2 = row_x[h], row_z[h]
+            nx1, nz1 = x1 ^ full_mask, z1 ^ full_mask
+            nx2, nz2 = x2 ^ full_mask, z2 ^ full_mask
+            pos = (x1 & z1 & nx2 & z2) | (x1 & nz1 & x2 & z2) | (nx1 & z1 & x2 & nz2)
+            neg = (x1 & z1 & x2 & nz2) | (nx1 & z1 & x2 & z2) | (x1 & nz1 & nx2 & z2)
+            acc = 2 * row_r[h] + 2 * row_r[i] + pos.bit_count() - neg.bit_count()
+            row_r[h] = 1 if (acc & 3) == 2 else 0
+            row_x[h] = x2 ^ x1
+            row_z[h] = z2 ^ z1
+            row_coins[h] ^= row_coins[i]
+
+        wire_laws: dict[int, tuple[int, int]] = {}
+        num_coins = 0
+
+        for wire in measured_wires:
+            if wire in wire_laws:
+                continue
+            w_bit = 1 << wire
+            p_row = -1
+            for p in range(n, rows):
+                if row_x[p] & w_bit:
+                    p_row = p
+                    break
+
+            if p_row >= 0:
+                for h in range(rows):
+                    if h != p_row and h != (p_row - n) and (row_x[h] & w_bit):
+                        rowsum(h, p_row)
+                dst = p_row - n
+                row_x[dst] = row_x[p_row]
+                row_z[dst] = row_z[p_row]
+                row_r[dst] = row_r[p_row]
+                row_coins[dst] = row_coins[p_row]
+
+                row_x[p_row] = 0
+                row_z[p_row] = w_bit
+                row_r[p_row] = int(commit_first_outcome) if commit_first_outcome is not None else 0
+                coin_bit = 1 << num_coins
+                num_coins += 1
+                row_coins[p_row] = coin_bit
+                wire_laws[wire] = (0, coin_bit)
+
+                if commit_first_outcome is not None:
+                    self.x_cols = [0] * n
+                    self.z_cols = [0] * n
+                    new_r = 0
+                    for r_idx in range(rows):
+                        rb = 1 << r_idx
+                        if row_r[r_idx]:
+                            new_r |= rb
+                        rx_val = row_x[r_idx]
+                        while rx_val:
+                            lb = rx_val & -rx_val
+                            self.x_cols[lb.bit_length() - 1] |= rb
+                            rx_val ^= lb
+                        rz_val = row_z[r_idx]
+                        while rz_val:
+                            lb = rz_val & -rz_val
+                            self.z_cols[lb.bit_length() - 1] |= rb
+                            rz_val ^= lb
+                    self.r_mask = new_r
             else:
-                g_sum += x2 * (1 - 2 * z2)
+                sx = 0
+                sz = 0
+                sr = 0
+                scoins = 0
+                for d_idx in range(n):
+                    if row_x[d_idx] & w_bit:
+                        s_row = d_idx + n
+                        x1, z1 = row_x[s_row], row_z[s_row]
+                        nx1, nz1 = x1 ^ full_mask, z1 ^ full_mask
+                        nx2, nz2 = sx ^ full_mask, sz ^ full_mask
+                        pos = (x1 & z1 & nx2 & sz) | (x1 & nz1 & sx & sz) | (nx1 & z1 & sx & nz2)
+                        neg = (x1 & z1 & sx & nz2) | (nx1 & z1 & sx & sz) | (x1 & nz1 & nx2 & sz)
+                        acc = 2 * sr + 2 * row_r[s_row] + pos.bit_count() - neg.bit_count()
+                        sr = 1 if (acc & 3) == 2 else 0
+                        sx ^= x1
+                        sz ^= z1
+                        scoins ^= row_coins[s_row]
+                wire_laws[wire] = (sr, scoins)
 
-            if x1:
-                self.x_cols[q] ^= hb
-            if z1:
-                self.z_cols[q] ^= hb
+        return num_coins, wire_laws
 
-        if ((rh + ri + g_sum) % 4) == 2:
-            self.r_mask |= hb
-        else:
-            self.r_mask &= ~hb
+    def compile_affine_measurement_frame(
+        self, measured_wires: Sequence[int]
+    ) -> tuple[int, dict[int, tuple[int, int]]]:
+        """Compiles Z-basis measurements into an exact F_2-affine frame (`inv013AffineStabilizerFrameExact`)."""
+        return self._compile_affine_internal(measured_wires, commit_first_outcome=None)
 
     def measure_z(self, wire: int, rng: random.Random) -> int:
-        n = self.num_qubits
-        stab_x = self.x_cols[wire] >> n
+        """In-place single-wire projective Z collapse for mid-circuit reset/measurement paths."""
+        stab_x = self.x_cols[wire] >> self.num_qubits
         if stab_x != 0:
-            # Random outcome: find smallest anticommuting stabilizer p >= n
-            lowest_bit = stab_x & -stab_x
-            p = n + (lowest_bit.bit_length() - 1)
-            pb = 1 << p
-            anti_mask = self.x_cols[wire] & ~pb
-            cur = anti_mask
-            while cur:
-                lb = cur & -cur
-                h = lb.bit_length() - 1
-                self._row_mult(h, p)
-                cur ^= lb
+            drawn = 1 if rng.random() >= 0.5 else 0
+            self._compile_affine_internal([wire], commit_first_outcome=drawn)
+            return drawn
+        _, laws = self._compile_affine_internal([wire], commit_first_outcome=None)
+        return laws[wire][0]
 
-            # Copy row p into destabilizer p - n, then set row p to +-Z_wire
-            dest_b = 1 << (p - n)
-            for q in range(n):
-                if self.x_cols[q] & pb:
-                    self.x_cols[q] |= dest_b
-                else:
-                    self.x_cols[q] &= ~dest_b
-                if self.z_cols[q] & pb:
-                    self.z_cols[q] |= dest_b
-                else:
-                    self.z_cols[q] &= ~dest_b
-                self.x_cols[q] &= ~pb
-                self.z_cols[q] &= ~pb
-            if self.r_mask & pb:
-                self.r_mask |= dest_b
+
+# ============================================================================
+# Substrate 2B: Exact Rank-Revealing Tensor-Train MPS (`ExactMps`, `AQ-14`)
+# ============================================================================
+
+
+@dataclass
+class MpsSite:
+    chi_l: int
+    chi_r: int
+    m0: list[complex]  # row-major chi_l * chi_r
+    m1: list[complex]  # row-major chi_l * chi_r
+
+
+@dataclass
+class ExactMpsTensorTrain:
+    """1D Matrix Product State (`ExactMps`) with rank-revealing column-pivoted Gram-Schmidt QR compression."""
+
+    num_qubits: int
+    sites: list[MpsSite]
+    max_bond_cap: int = 64
+
+    @classmethod
+    def ground_state(cls, n: int, max_bond_cap: int = 64) -> ExactMpsTensorTrain:
+        sites = [MpsSite(1, 1, [1.0 + 0.0j], [0.0 + 0.0j]) for _ in range(n)]
+        return cls(n, sites, max_bond_cap)
+
+    def max_bond_dim(self) -> int:
+        if self.num_qubits <= 1:
+            return 1
+        return max((s.chi_r for s in self.sites[:-1]), default=1)
+
+    def apply_1q(self, q: int, op: str) -> None:
+        s = self.sites[q]
+        ln = s.chi_l * s.chi_r
+        inv_s2 = math.sqrt(0.5)
+        zeta = cmath.exp(1j * math.pi / 4.0)
+        m0_out = [0j] * ln
+        m1_out = [0j] * ln
+        for idx in range(ln):
+            u0, u1 = s.m0[idx], s.m1[idx]
+            if op == "h":
+                m0_out[idx] = (u0 + u1) * inv_s2
+                m1_out[idx] = (u0 - u1) * inv_s2
+            elif op == "x":
+                m0_out[idx], m1_out[idx] = u1, u0
+            elif op == "y":
+                m0_out[idx], m1_out[idx] = -1j * u1, 1j * u0
+            elif op == "z":
+                m0_out[idx], m1_out[idx] = u0, -u1
+            elif op == "s":
+                m0_out[idx], m1_out[idx] = u0, 1j * u1
+            elif op == "t":
+                m0_out[idx], m1_out[idx] = u0, zeta * u1
             else:
-                self.r_mask &= ~dest_b
+                m0_out[idx], m1_out[idx] = u0, u1
+        self.sites[q] = MpsSite(s.chi_l, s.chi_r, m0_out, m1_out)
 
-            self.z_cols[wire] |= pb
-            outcome = 1 if rng.random() >= 0.5 else 0
-            if outcome:
-                self.r_mask |= pb
-            else:
-                self.r_mask &= ~pb
-            return outcome
+    def _apply_adjacent_2q(self, k: int, op: str, reverse_ctrl: bool) -> None:
+        sa = self.sites[k]
+        sb = self.sites[k + 1]
+        chi_l, chi_m, chi_r = sa.chi_l, sa.chi_r, sb.chi_r
+        rows = 2 * chi_l
+        cols = 2 * chi_r
+        theta = [0j] * (rows * cols)
 
-        # Deterministic outcome: scratch row logic without mutating stabilizers
-        scratch_x: list[int] = [0] * n
-        scratch_z: list[int] = [0] * n
-        scratch_r = 0
-        dest_anticomm = self.x_cols[wire] & ((1 << n) - 1)
-        cur = dest_anticomm
-        while cur:
-            lb = cur & -cur
-            d_idx = lb.bit_length() - 1
-            s_row = d_idx + n
-            sb = 1 << s_row
-            ri = 2 if (self.r_mask & sb) else 0
-            g_sum = 0
-            for q in range(n):
-                x1 = 1 if (self.x_cols[q] & sb) else 0
-                z1 = 1 if (self.z_cols[q] & sb) else 0
-                x2, z2 = scratch_x[q], scratch_z[q]
-                if x1 == 1 and z1 == 1:
-                    g_sum += z2 - x2
-                elif x1 == 1 and z1 == 0:
-                    g_sum += z2 * (2 * x2 - 1)
-                elif x1 == 0 and z1 == 1:
-                    g_sum += x2 * (1 - 2 * z2)
-                scratch_x[q] ^= x1
-                scratch_z[q] ^= z1
-            scratch_r = (scratch_r + ri + g_sum) % 4
-            cur ^= lb
-        return 1 if scratch_r == 2 else 0
+        for s_a in (0, 1):
+            mat_a = sa.m0 if s_a == 0 else sa.m1
+            for s_b in (0, 1):
+                mat_b = sb.m0 if s_b == 0 else sb.m1
+                for a in range(chi_l):
+                    for g in range(chi_r):
+                        acc = 0j
+                        for b in range(chi_m):
+                            acc += mat_a[a * chi_m + b] * mat_b[b * chi_r + g]
+                        theta[(s_a * chi_l + a) * cols + (s_b * chi_r + g)] = acc
+
+        for a in range(chi_l):
+            for g in range(chi_r):
+                i01 = (0 * chi_l + a) * cols + (1 * chi_r + g)
+                i10 = (1 * chi_l + a) * cols + (0 * chi_r + g)
+                i11 = (1 * chi_l + a) * cols + (1 * chi_r + g)
+                if op == "cx":
+                    if not reverse_ctrl:
+                        theta[i10], theta[i11] = theta[i11], theta[i10]
+                    else:
+                        theta[i01], theta[i11] = theta[i11], theta[i01]
+                elif op == "cz":
+                    theta[i11] = -theta[i11]
+                elif op == "swap":
+                    theta[i01], theta[i10] = theta[i10], theta[i01]
+
+        # Rank-revealing column-pivoted Modified Gram-Schmidt QR: Theta == Q * R with minimal exact rank!
+        res_cols = [[theta[r * cols + j] for r in range(rows)] for j in range(cols)]
+        max_col_sq = max(
+            (sum(v.real * v.real + v.imag * v.imag for v in col) for col in res_cols),
+            default=0.0,
+        )
+        tol_sq = 1e-26 * max(1e-30, max_col_sq)
+        q_basis: list[list[complex]] = []
+        r_rows: list[list[complex]] = []
+        limit_rank = min(rows, cols, self.max_bond_cap)
+
+        while len(q_basis) < limit_rank:
+            best_j = -1
+            best_sq = 0.0
+            for j in range(cols):
+                nsq = sum(v.real * v.real + v.imag * v.imag for v in res_cols[j])
+                if nsq > best_sq:
+                    best_sq = nsq
+                    best_j = j
+            if best_j < 0 or best_sq <= tol_sq:
+                break
+            inv_n = 1.0 / math.sqrt(best_sq)
+            q_vec = [v * inv_n for v in res_cols[best_j]]
+            r_row = [0j] * cols
+            for j in range(cols):
+                proj = sum(q_vec[r].conjugate() * res_cols[j][r] for r in range(rows))
+                r_row[j] = proj
+                if proj != 0j:
+                    for r in range(rows):
+                        res_cols[j][r] -= q_vec[r] * proj
+            q_basis.append(q_vec)
+            r_rows.append(r_row)
+
+        if not q_basis:
+            q_basis = [[0j] * rows]
+            r_rows = [[0j] * cols]
+
+        rank = len(q_basis)
+        a0 = [q_basis[k_idx][0 * chi_l + a] for a in range(chi_l) for k_idx in range(rank)]
+        a1 = [q_basis[k_idx][1 * chi_l + a] for a in range(chi_l) for k_idx in range(rank)]
+        b0 = [r_rows[k_idx][0 * chi_r + g] for k_idx in range(rank) for g in range(chi_r)]
+        b1 = [r_rows[k_idx][1 * chi_r + g] for k_idx in range(rank) for g in range(chi_r)]
+        self.sites[k] = MpsSite(chi_l, rank, a0, a1)
+        self.sites[k + 1] = MpsSite(rank, chi_r, b0, b1)
+
+    def apply_2q(self, w0: int, w1: int, op: str) -> None:
+        low, high = min(w0, w1), max(w0, w1)
+        rev = w0 > w1
+        for k in range(low, high - 1):
+            self._apply_adjacent_2q(k, "swap", False)
+        self._apply_adjacent_2q(high - 1, op, rev)
+        for k in range(high - 2, low - 1, -1):
+            self._apply_adjacent_2q(k, "swap", False)
+
+
+def execute_exact_mps_steps(
+    num_qubits: int, steps: Sequence[tuple[str, tuple[int, ...]]], max_bond_cap: int = 64
+) -> ExactMpsTensorTrain:
+    mps = ExactMpsTensorTrain.ground_state(num_qubits, max_bond_cap=max_bond_cap)
+    for op, qs in steps:
+        if len(qs) == 1:
+            mps.apply_1q(qs[0], op)
+        else:
+            mps.apply_2q(qs[0], qs[1], op)
+    return mps
+
+
+def compute_exact_mps_pauli_expectation(mps: ExactMpsTensorTrain, pauli_label: str) -> float:
+    """Exact `O(n * chi^3)` transfer-matrix contraction `<psi | P | psi> / <psi | psi>` with joint trace rescaling."""
+    n = mps.num_qubits
+    p_str = pauli_label.strip().upper()
+    if len(p_str) != n:
+        raise ValueError(f"Pauli observable '{p_str}' length ({len(p_str)}) != {n}")
+
+    norm_env = [1.0 + 0.0j]
+    op_env = [1.0 + 0.0j]
+
+    def step_transfer(
+        env: list[complex],
+        b0: list[complex],
+        b1: list[complex],
+        k0: list[complex],
+        k1: list[complex],
+        dl: int,
+        dr: int,
+    ) -> list[complex]:
+        out = [0j] * (dr * dr)
+        for bra, ket in ((b0, k0), (b1, k1)):
+            tmp = [0j] * (dl * dr)
+            for a in range(dl):
+                for b in range(dl):
+                    ev = env[a * dl + b]
+                    if ev == 0j:
+                        continue
+                    for g in range(dr):
+                        tmp[a * dr + g] += ev * ket[b * dr + g]
+            for a in range(dl):
+                for g1 in range(dr):
+                    cv = bra[a * dr + g1].conjugate()
+                    if cv == 0j:
+                        continue
+                    for g2 in range(dr):
+                        out[g1 * dr + g2] += cv * tmp[a * dr + g2]
+        return out
+
+    for q in range(n):
+        s = mps.sites[q]
+        dl, dr = s.chi_l, s.chi_r
+        ch = p_str[n - 1 - q]
+        if ch == "I":
+            k0, k1 = s.m0, s.m1
+        elif ch == "X":
+            k0, k1 = s.m1, s.m0
+        elif ch == "Z":
+            k0, k1 = s.m0, [-v for v in s.m1]
+        elif ch == "Y":
+            k0, k1 = [-1j * v for v in s.m1], [1j * v for v in s.m0]
+        else:
+            raise ValueError(f"Unsupported Pauli character '{ch}' in '{p_str}'.")
+
+        norm_env = step_transfer(norm_env, s.m0, s.m1, s.m0, s.m1, dl, dr)
+        op_env = step_transfer(op_env, s.m0, s.m1, k0, k1, dl, dr)
+        tr = sum(norm_env[g * dr + g].real for g in range(dr))
+        scale = tr if tr > 1e-300 else 1.0
+        norm_env = [v / scale for v in norm_env]
+        op_env = [v / scale for v in op_env]
+
+    denom = max(1e-30, norm_env[0].real)
+    return op_env[0].real / denom
+
+
+def sample_exact_mps_chain_rule(
+    mps: ExactMpsTensorTrain,
+    unique_wires: Sequence[int],
+    shots: int,
+    rng: random.Random,
+) -> tuple[list[dict[int, int]], dict[int, float] | None]:
+    """Sequential `O(n * chi^2)` per-shot chain-rule Born sampler + exact analytical marginals (`|W| <= 10`)."""
+    n = mps.num_qubits
+    right_envs: list[list[complex]] = [[1.0 + 0.0j] for _ in range(n + 1)]
+    for q in range(n - 1, -1, -1):
+        s = mps.sites[q]
+        dl, dr = s.chi_l, s.chi_r
+        r_next = right_envs[q + 1]
+        cur = [0j] * (dl * dl)
+        for mat in (s.m0, s.m1):
+            tmp = [0j] * (dl * dr)
+            for a in range(dl):
+                for b in range(dr):
+                    av = mat[a * dr + b]
+                    if av == 0j:
+                        continue
+                    for g in range(dr):
+                        tmp[a * dr + g] += av * r_next[b * dr + g]
+            for a1 in range(dl):
+                for g in range(dr):
+                    tv = tmp[a1 * dr + g]
+                    if tv == 0j:
+                        continue
+                    for a2 in range(dl):
+                        cur[a1 * dl + a2] += tv * mat[a2 * dr + g].conjugate()
+        tr = sum(abs(cur[a * dl + a].real) for a in range(dl))
+        if tr > 0.0:
+            cur = [v / tr for v in cur]
+        right_envs[q] = cur
+
+    if not unique_wires:
+        return [{} for _ in range(shots)], {}
+
+    meas_set = set(unique_wires)
+    max_w = max(unique_wires)
+
+    marginals: dict[int, float] | None = None
+    if len(unique_wires) <= 10:
+        wire_to_pos = {w: idx for idx, w in enumerate(unique_wires)}
+        branches: list[tuple[int, list[complex]]] = [(0, [1.0 + 0.0j])]
+        for q in range(max_w + 1):
+            s = mps.sites[q]
+            dl, dr = s.chi_l, s.chi_r
+            bpos = wire_to_pos.get(q)
+
+            def prop_one(env: list[complex], mat: list[complex]) -> list[complex]:
+                out = [0j] * (dr * dr)
+                tmp = [0j] * (dl * dr)
+                for a in range(dl):
+                    for b in range(dl):
+                        ev = env[a * dl + b]
+                        if ev == 0j:
+                            continue
+                        for g in range(dr):
+                            tmp[a * dr + g] += ev * mat[b * dr + g]
+                for a in range(dl):
+                    for g1 in range(dr):
+                        cv = mat[a * dr + g1].conjugate()
+                        if cv == 0j:
+                            continue
+                        for g2 in range(dr):
+                            out[g1 * dr + g2] += cv * tmp[a * dr + g2]
+                return out
+
+            nxt_b: list[tuple[int, list[complex]]] = []
+            for mask, env in branches:
+                e0 = prop_one(env, s.m0)
+                e1 = prop_one(env, s.m1)
+                if bpos is not None:
+                    nxt_b.append((mask, e0))
+                    nxt_b.append((mask | (1 << bpos), e1))
+                else:
+                    nxt_b.append((mask, [x + y for x, y in zip(e0, e1)]))
+            j_tr = sum(max(0.0, env[g * dr + g].real) for _, env in nxt_b for g in range(dr))
+            if j_tr > 0.0:
+                nxt_b = [(m, [v / j_tr for v in env]) for m, env in nxt_b]
+            branches = nxt_b
+
+        tail_r = right_envs[max_w + 1]
+        dt = mps.sites[max_w].chi_r
+        raw_w: list[tuple[int, float]] = []
+        w_sum = 0.0
+        for mask, env in branches:
+            val = 0.0
+            for g1 in range(dt):
+                for g2 in range(dt):
+                    val += (env[g1 * dt + g2] * tail_r[g2 * dt + g1]).real
+            pw = max(0.0, val)
+            raw_w.append((mask, pw))
+            w_sum += pw
+        inv_s = 1.0 / max(1e-30, w_sum)
+        marginals = {m: pw * inv_s for m, pw in raw_w if pw * inv_s > 1e-16}
+
+    shot_outcomes: list[dict[int, int]] = []
+    for _ in range(shots):
+        out_map: dict[int, int] = {}
+        vec = [1.0 + 0.0j]
+        for q in range(max_w + 1):
+            s = mps.sites[q]
+            dl, dr = s.chi_l, s.chi_r
+            r_mat = right_envs[q + 1]
+            w0 = [0j] * dr
+            w1 = [0j] * dr
+            for a in range(dl):
+                va = vec[a]
+                if va == 0j:
+                    continue
+                for g in range(dr):
+                    w0[g] += va * s.m0[a * dr + g]
+                    w1[g] += va * s.m1[a * dr + g]
+
+            def qweight(wv: list[complex]) -> float:
+                acc = 0.0
+                for g1 in range(dr):
+                    if wv[g1] == 0j:
+                        continue
+                    for g2 in range(dr):
+                        acc += (wv[g1] * r_mat[g1 * dr + g2] * wv[g2].conjugate()).real
+                return max(0.0, acc)
+
+            u0 = qweight(w0)
+            u1 = qweight(w1)
+            tot = u0 + u1
+            p1 = min(1.0, max(0.0, u1 / tot)) if tot > 1e-30 else 0.5
+            bit = 1 if rng.random() < p1 else 0
+            if q in meas_set:
+                out_map[q] = bit
+            chosen = w1 if bit == 1 else w0
+            nsq = sum(v.real * v.real + v.imag * v.imag for v in chosen)
+            inv_n = 1.0 / math.sqrt(nsq) if nsq > 1e-30 else 1.0
+            vec = [v * inv_n for v in chosen]
+        shot_outcomes.append(out_map)
+
+    return shot_outcomes, marginals
 
 
 # ============================================================================
@@ -1173,6 +1647,70 @@ class VerdantAqmResult:
             )
         return list(exp.data.memory)
 
+    def to_uorc_bytes(self) -> bytes:
+        payload = {
+            "schema": "verdant-aqm/qiskit-result/1",
+            "backend_name": self.backend_name,
+            "backend_version": self.backend_version,
+            "job_id": self.job_id,
+            "success": self.success,
+            "status": self.status,
+            "results": [
+                {
+                    "shots": r.shots,
+                    "success": r.success,
+                    "status": r.status,
+                    "seed_simulator": r.seed_simulator,
+                    "header": r.header,
+                    "data": {
+                        "counts": r.data.counts,
+                        "formatted_counts": r.data.formatted_counts,
+                        "probabilities": r.data.probabilities,
+                        "memory": r.data.memory,
+                    },
+                    "metadata": r.metadata,
+                }
+                for r in self.results
+            ],
+        }
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return compress_uorc_portable(raw)
+
+    @classmethod
+    def from_uorc_bytes(cls, archive: bytes | bytearray | memoryview) -> VerdantAqmResult:
+        raw = decompress_uorc_portable(bytes(archive))
+        obj = json.loads(raw.decode("utf-8"))
+        if not isinstance(obj, dict) or obj.get("schema") != "verdant-aqm/qiskit-result/1":
+            raise ValueError("UorcWireError::CorruptedCodedBundle: Invalid Qiskit Result UORC payload schema")
+        exp_list: list[ExperimentResult] = []
+        for item in obj.get("results", []):
+            d = item["data"]
+            exp_list.append(
+                ExperimentResult(
+                    shots=int(item["shots"]),
+                    success=bool(item["success"]),
+                    status=str(item["status"]),
+                    seed_simulator=int(item["seed_simulator"]),
+                    header=dict(item["header"]),
+                    data=ExperimentResultData(
+                        counts=dict(d["counts"]),
+                        formatted_counts=dict(d["formatted_counts"]),
+                        probabilities=dict(d["probabilities"]),
+                        memory=list(d["memory"]) if d.get("memory") is not None else None,
+                    ),
+                    metadata=dict(item["metadata"]),
+                )
+            )
+        return cls(
+            backend_name=str(obj["backend_name"]),
+            backend_version=str(obj["backend_version"]),
+            job_id=str(obj["job_id"]),
+            results=exp_list,
+            success=bool(obj.get("success", True)),
+            status=str(obj.get("status", "COMPLETED")),
+        )
+
+
 
 class VerdantAqmJob(_BaseJobV1):  # type: ignore[misc]
     """Synchronous deterministic Qiskit `JobV1` wrapper."""
@@ -1324,6 +1862,9 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
         exact_cyc = True
         seen_meas = False
         mid_circuit = False
+        branching_wires: set[int] = set()
+        max_span = 0
+        has_3q = False
 
         for inst in circuit.instructions:
             c = ISA_ALIASES.get(inst.name, inst.name)
@@ -1334,10 +1875,20 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 continue
             if c == "reset":
                 mid_circuit = True
-                pure_clifford = False
+                # Reset is Z-basis projective collapse + conditional Pauli-X — 100% pure Clifford!
                 continue
             if seen_meas:
                 mid_circuit = True
+            if c in ("h", "sx", "sxdg"):
+                branching_wires.add(inst.qubits[0])
+            elif c == "ch":
+                branching_wires.add(inst.qubits[1])
+            if len(inst.qubits) == 2:
+                max_span = max(max_span, abs(inst.qubits[0] - inst.qubits[1]))
+            elif len(inst.qubits) >= 3:
+                has_3q = True
+                max_span = max(max_span, max(inst.qubits) - min(inst.qubits))
+
             if c == "p":
                 ang = _eval_angle(inst.params[0], bindings)
                 ratio = ang / (math.pi / 4)
@@ -1354,15 +1905,20 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             if not cyc:
                 exact_cyc = False
 
-        if pure_clifford and not mid_circuit:
+        if pure_clifford:
             return ("StabilizerTableau", True, True)
-        if exact_cyc and not mid_circuit:
-            return ("CyclotomicExact", False, True)
+        if exact_cyc:
+            prefer_mps = (not mid_circuit) and (not has_3q) and len(branching_wires) > 16 and max_span <= 4
+            return ("ExactMps" if prefer_mps else "CyclotomicExact", False, True)
         return ("ExactSparseContinuum", False, False)
 
     def evaluate_exact_state(
         self, run_circuit: Any, bindings: dict[str, float] | None = None
-    ) -> tuple[str, dict[int, complex] | PackedStabilizerTableau, NormalizedCircuit]:
+    ) -> tuple[
+        str,
+        dict[int, complex] | PackedStabilizerTableau | ExactMpsTensorTrain | list[tuple[str, tuple[int, ...]]],
+        NormalizedCircuit,
+    ]:
         """Evaluates the exact pre-measurement state representation for analytical `EstimatorV2`."""
         bind = bindings or {}
         circuit = normalize_circuit(run_circuit)
@@ -1379,22 +1935,27 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             unitary_ops,
             circuit.parameters,
         )
-        sub, is_cliff, is_cyc = self._select_substrate(unitary_circuit, bind)
-        if is_cliff and circuit.num_qubits > 16:
+        auto_sub, is_cliff, is_cyc = self._select_substrate(unitary_circuit, bind)
+        forced = str(getattr(self._options, "substrate", "auto"))
+        sub = auto_sub if forced == "auto" else forced
+
+        # O(gates) Heisenberg adjoint Pauli conjugation works for ANY Clifford qubit width n >= 1!
+        if sub == "StabilizerTableau" and is_cliff:
             steps, _ = _decompose_exact_gate_sequence(unitary_ops, bind)
-            tab = PackedStabilizerTableau.ground_state(circuit.num_qubits)
-            for op, qs in steps:
-                tab.apply_unitary(op, qs)
-            return ("StabilizerTableau", tab, unitary_circuit)
-        if is_cyc:
+            return ("StabilizerTableau", steps, unitary_circuit)
+        if sub == "ExactMps" and is_cyc:
+            steps, _ = _decompose_exact_gate_sequence(unitary_ops, bind)
+            mps = execute_exact_mps_steps(circuit.num_qubits, steps)
+            return ("ExactMps", mps, unitary_circuit)
+        if is_cyc and sub not in ("ExactSparseContinuum", "AtlasHolospace"):
             steps, _ = _decompose_exact_gate_sequence(unitary_ops, bind)
             cyc_map, k, _ = execute_sparse_cyclotomic(steps)
             sparse_c = {ket: _z8_to_complex(amp, k) for ket, amp in cyc_map.items()}
-            return (sub, sparse_c, unitary_circuit)
+            return ("CyclotomicExact", sparse_c, unitary_circuit)
         sparse: dict[int, complex] = {0: 1.0 + 0.0j}
         for inst in unitary_ops:
             sparse = apply_unitary_sparse_continuum(sparse, inst, bind)
-        return ("ExactSparseContinuum", sparse, unitary_circuit)
+        return ("AtlasHolospace" if sub == "AtlasHolospace" else "ExactSparseContinuum", sparse, unitary_circuit)
 
     def run(self, run_input: Any, **run_options: Any) -> VerdantAqmJob:
         raw_list = list(run_input) if isinstance(run_input, (list, tuple)) else [run_input]
@@ -1410,6 +1971,7 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             base_seed = 20260519
         record_memory = bool(run_options.get("memory", getattr(self._options, "memory", False)))
         forced_sub = str(run_options.get("substrate", getattr(self._options, "substrate", "auto")))
+        use_fusion = bool(run_options.get("prism_fusion", getattr(self._options, "prism_fusion", True)))
         binds_list: list[dict[str, float]] = list(run_options.get("parameter_binds") or [{}])
 
         exp_results: list[ExperimentResult] = []
@@ -1420,7 +1982,9 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 seed = (int(base_seed) + exp_idx * 7919) & 0xFFFFFFFF
                 exp_idx += 1
                 exp_results.append(
-                    self._execute_single(circuit, bind_map, shots, seed, record_memory, forced_sub)
+                    self._execute_single(
+                        circuit, bind_map, shots, seed, record_memory, forced_sub, use_fusion
+                    )
                 )
 
         job_kappa = compute_job_kappa(
@@ -1451,6 +2015,7 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
         seed: int,
         memory: bool,
         forced_substrate: str,
+        use_fusion: bool = True,
     ) -> ExperimentResult:
         rng = random.Random(seed)
         auto_sub, is_cliff, is_cyc = self._select_substrate(circuit, bindings)
@@ -1485,101 +2050,172 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             if memory:
                 shot_memory.append(fmt)
 
+        def sample_from_probabilities() -> None:
+            """O(shots * log M) binary-search sampler over pre-grouped formatted outcomes."""
+            items = sorted(probabilities.items(), key=lambda kv: kv[0])
+            if not items:
+                return
+            fmt_tbl = [kv[0] for kv in items]
+            hex_tbl = [_bitstring_to_hex(kv[0]) for kv in items]
+            cum_tbl: list[float] = []
+            acc = 0.0
+            for _, pval in items:
+                acc += pval
+                cum_tbl.append(acc)
+            cum_tbl[-1] = max(1.0, acc)
+            last_idx = len(items) - 1
+            for _ in range(shots):
+                idx = bisect.bisect_left(cum_tbl, rng.random())
+                if idx > last_idx:
+                    idx = last_idx
+                fmt = fmt_tbl[idx]
+                hx = hex_tbl[idx]
+                formatted_counts[fmt] = formatted_counts.get(fmt, 0) + 1
+                hex_counts[hx] = hex_counts.get(hx, 0) + 1
+                if memory:
+                    shot_memory.append(fmt)
+
         if tail_pure_measure:
             prefix = circuit.instructions[:first_non_unitary]
             meas_ops = [i for i in tail if ISA_ALIASES.get(i.name, i.name) == "measure"]
 
             if chosen_sub == "StabilizerTableau" and is_cliff:
-                steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings)
+                steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings, enable_fusion=use_fusion)
                 base_tab = PackedStabilizerTableau.ground_state(circuit.num_qubits)
                 for op, qs in steps:
                     base_tab.apply_unitary(op, qs)
                 active_kets = circuit.num_qubits
                 if meas_ops and circuit.num_clbits > 0:
+                    unique_wires = list(dict.fromkeys(mop.qubits[0] for mop in meas_ops))
+                    num_coins, wire_laws = base_tab.compile_affine_measurement_frame(unique_wires)
+                    if num_coins <= 12:
+                        branch_cnt = 1 << num_coins
+                        inv_b = 1.0 / branch_cnt
+                        for c_val in range(branch_cnt):
+                            clbits = [0] * circuit.num_clbits
+                            for mop in meas_ops:
+                                base_b, mask_b = wire_laws[mop.qubits[0]]
+                                clbits[mop.clbits[0]] = base_b ^ ((mask_b & c_val).bit_count() & 1)
+                            fmt = _format_qiskit_bitstring(clbits, circuit.cregs)
+                            probabilities[fmt] = probabilities.get(fmt, 0.0) + inv_b
                     for _ in range(shots):
-                        shot_tab = base_tab.copy()
-                        wire_cache: dict[int, int] = {}
+                        coin_draw = rng.getrandbits(num_coins) if num_coins > 0 else 0
                         clbits = [0] * circuit.num_clbits
                         for mop in meas_ops:
-                            q, c = mop.qubits[0], mop.clbits[0]
-                            if q not in wire_cache:
-                                wire_cache[q] = shot_tab.measure_z(q, rng)
-                            clbits[c] = wire_cache[q]
+                            base_b, mask_b = wire_laws[mop.qubits[0]]
+                            clbits[mop.clbits[0]] = base_b ^ ((mask_b & coin_draw).bit_count() & 1)
                         record_shot(clbits)
-                    for k_str, cnt in formatted_counts.items():
-                        probabilities[k_str] = cnt / shots
+                    if num_coins > 12:
+                        for k_str, cnt in formatted_counts.items():
+                            probabilities[k_str] = cnt / shots
 
-            elif is_cyc and chosen_sub != "ExactSparseContinuum":
-                steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings)
+            elif chosen_sub == "ExactMps" and is_cyc:
+                steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings, enable_fusion=use_fusion)
+                mps = execute_exact_mps_steps(circuit.num_qubits, steps)
+                active_kets = mps.max_bond_dim()
+                norm_exact_one = True
+                if meas_ops and circuit.num_clbits > 0:
+                    unique_wires = list(dict.fromkeys(mop.qubits[0] for mop in meas_ops))
+                    shot_maps, marginals = sample_exact_mps_chain_rule(mps, unique_wires, shots, rng)
+                    if marginals is not None:
+                        w_index = {w: idx for idx, w in enumerate(unique_wires)}
+                        for mask, prob in marginals.items():
+                            full_cl = [0] * circuit.num_clbits
+                            for mop in meas_ops:
+                                full_cl[mop.clbits[0]] = 1 if (mask & (1 << w_index[mop.qubits[0]])) else 0
+                            fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
+                            probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
+                    for omap in shot_maps:
+                        full_cl = [0] * circuit.num_clbits
+                        for mop in meas_ops:
+                            full_cl[mop.clbits[0]] = omap.get(mop.qubits[0], 0)
+                        record_shot(full_cl)
+                    if marginals is None:
+                        for k_str, cnt in formatted_counts.items():
+                            probabilities[k_str] = cnt / shots
+
+            elif is_cyc and chosen_sub not in ("ExactSparseContinuum", "AtlasHolospace"):
+                steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings, enable_fusion=use_fusion)
                 cyc_support, k_den, norm_exact_one = execute_sparse_cyclotomic(steps)
                 active_kets = len(cyc_support)
                 if meas_ops and circuit.num_clbits > 0:
-                    scale_sq = 0.5**k_den
-                    cdf: list[tuple[int, float]] = []
-                    for ket, amp in sorted(cyc_support.items()):
-                        p, q_s2 = _z8_abs_sq(amp)
-                        prob = (p + q_s2 * math.sqrt(2.0)) * scale_sq
+                    for ket, amp in cyc_support.items():
+                        prob = _z8_prob_scaled(amp, k_den)
                         if prob > 1e-16:
-                            cdf.append((ket, prob))
-                            clbits = [1 if (ket & (1 << m.qubits[0])) else 0 for m in meas_ops]
                             full_cl = [0] * circuit.num_clbits
-                            for m, bitval in zip(meas_ops, clbits):
-                                full_cl[m.clbits[0]] = bitval
+                            for m in meas_ops:
+                                full_cl[m.clbits[0]] = 1 if (ket & (1 << m.qubits[0])) else 0
                             fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
                             probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
-                    for _ in range(shots):
-                        u = rng.random()
-                        acc = 0.0
-                        picked = cdf[-1][0] if cdf else 0
-                        for ket, prob in cdf:
-                            acc += prob
-                            if u <= acc:
-                                picked = ket
-                                break
-                        full_cl = [0] * circuit.num_clbits
-                        for m in meas_ops:
-                            full_cl[m.clbits[0]] = 1 if (picked & (1 << m.qubits[0])) else 0
-                        record_shot(full_cl)
+                    sample_from_probabilities()
             else:
                 sparse: dict[int, complex] = {0: 1.0 + 0.0j}
                 for inst in prefix:
                     sparse = apply_unitary_sparse_continuum(sparse, inst, bindings)
                 active_kets = len(sparse)
                 mass = 0.0
-                cdf = []
-                for ket, amp in sorted(sparse.items()):
+                for ket, amp in sparse.items():
                     prob = amp.real * amp.real + amp.imag * amp.imag
                     mass += prob
-                    if prob > 1e-16:
-                        cdf.append((ket, prob))
-                        if meas_ops and circuit.num_clbits > 0:
-                            full_cl = [0] * circuit.num_clbits
-                            for m in meas_ops:
-                                full_cl[m.clbits[0]] = 1 if (ket & (1 << m.qubits[0])) else 0
-                            fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
-                            probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
-                norm_exact_one = abs(mass - 1.0) < 1e-11
-                if meas_ops and circuit.num_clbits > 0:
-                    for _ in range(shots):
-                        u = rng.random()
-                        acc = 0.0
-                        picked = cdf[-1][0] if cdf else 0
-                        for ket, prob in cdf:
-                            acc += prob
-                            if u <= acc:
-                                picked = ket
-                                break
+                    if prob > 1e-16 and meas_ops and circuit.num_clbits > 0:
                         full_cl = [0] * circuit.num_clbits
                         for m in meas_ops:
-                            full_cl[m.clbits[0]] = 1 if (picked & (1 << m.qubits[0])) else 0
-                        record_shot(full_cl)
-        else:
-            # Dynamic mid-circuit measurement / reset trajectory execution
-            chosen_sub = "CyclotomicExact" if is_cyc else "ExactSparseContinuum"
+                            full_cl[m.clbits[0]] = 1 if (ket & (1 << m.qubits[0])) else 0
+                        fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
+                        probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
+                norm_exact_one = abs(mass - 1.0) < 1e-11
+                if meas_ops and circuit.num_clbits > 0:
+                    sample_from_probabilities()
+        elif chosen_sub == "StabilizerTableau" and is_cliff:
+            # Polynomial Gottesman-Knill mid-circuit measurement & reset trajectory execution (scales to 512+ qubits!)
+            prefix = circuit.instructions[:first_non_unitary]
+            prefix_steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings, enable_fusion=use_fusion)
+            base_tab = PackedStabilizerTableau.ground_state(circuit.num_qubits)
+            for op, qs in prefix_steps:
+                base_tab.apply_unitary(op, qs)
+            active_kets = circuit.num_qubits
+
+            tail_compiled: list[tuple[str, Any]] = []
+            for inst in tail:
+                c = ISA_ALIASES.get(inst.name, inst.name)
+                if c == "measure":
+                    tail_compiled.append(("measure", (inst.qubits[0], inst.clbits[0])))
+                elif c == "reset":
+                    tail_compiled.append(("reset", inst.qubits[0]))
+                elif c in ("id", "barrier"):
+                    continue
+                else:
+                    sub_steps, _ = _decompose_exact_gate_sequence([inst], bindings, enable_fusion=False)
+                    tail_compiled.append(("unitary", sub_steps))
+
             for _ in range(shots):
-                sparse = {0: 1.0 + 0.0j}
+                cur_tab = base_tab.copy()
                 full_cl = [0] * circuit.num_clbits
-                for inst in circuit.instructions:
+                for kind, payload in tail_compiled:
+                    if kind == "measure":
+                        w_idx, c_idx = payload
+                        full_cl[c_idx] = cur_tab.measure_z(w_idx, rng)
+                    elif kind == "reset":
+                        w_idx = payload
+                        if cur_tab.measure_z(w_idx, rng) == 1:
+                            cur_tab.apply_unitary("x", (w_idx,))
+                    else:
+                        for op, qs in payload:
+                            cur_tab.apply_unitary(op, qs)
+                if circuit.num_clbits > 0:
+                    record_shot(full_cl)
+            for k_str, cnt in formatted_counts.items():
+                probabilities[k_str] = cnt / shots
+        else:
+            # Dynamic mid-circuit measurement / reset trajectory execution with cached deterministic prefix!
+            chosen_sub = "CyclotomicExact" if is_cyc else "ExactSparseContinuum"
+            base_sparse: dict[int, complex] = {0: 1.0 + 0.0j}
+            for inst in circuit.instructions[:first_non_unitary]:
+                base_sparse = apply_unitary_sparse_continuum(base_sparse, inst, bindings)
+            for _ in range(shots):
+                sparse = dict(base_sparse)
+                full_cl = [0] * circuit.num_clbits
+                for inst in tail:
                     c = ISA_ALIASES.get(inst.name, inst.name)
                     if c == "measure":
                         sparse, bit = _measure_or_reset_sparse(sparse, inst.qubits[0], rng, False)

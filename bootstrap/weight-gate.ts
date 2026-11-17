@@ -22,7 +22,9 @@ import { gzipSync } from 'node:zlib';
 
 import { verifyHoloArchiveComplete } from '../ci/kappa-cache';
 import { CORE_WASM_ACCEPTANCE_VECTORS } from '../src/aqm/prismKernel';
+import { verifyParametricRatchetPlantedDefects } from '../src/aqm/ratchet';
 import { PrecacheManifest } from './precache';
+import { auditParametricRatchetOnDisk, loadDiskRatchetWorkspace } from './ratchet-gate';
 
 export const PAGES_WIRE_BUDGET = {
   holoGzipMaxBytes: 16 * 1024, // VerdantAqm.holo v4 guest (< 5 KiB raw, < 3 KiB gzip)
@@ -39,6 +41,7 @@ export interface PagesWeightGateReport {
   readonly totalRawBytes: number;
   readonly totalGzipBytes: number;
   readonly vectorsPassed: number;
+  readonly ratchetVerified: boolean;
 }
 
 const REQUIRED_ARTIFACTS = [
@@ -82,6 +85,19 @@ export async function verifyAssembledPagesSite(
     failures.push(
       'dist/index.html contains root-absolute /assets/ URLs that break GitHub Pages repository subpaths; set base="./" or VITE_BASE_PATH',
     );
+  }
+
+  // Enforce permanent zero-constants parametric ratchet (`FI-08` / `prism/parametric-ratchet/1`)
+  const ratchetReport = auditParametricRatchetOnDisk(cwd);
+  if (!ratchetReport.ok) {
+    failures.push(
+      `prism/parametric-ratchet/1 failed (${ratchetReport.violations.length} violation(s)): ${ratchetReport.error?.detail ?? 'ratchet violation'}`,
+    );
+  } else {
+    const plantedCheck = verifyParametricRatchetPlantedDefects(loadDiskRatchetWorkspace(cwd));
+    if (!plantedCheck.allCaughtAndRestored) {
+      failures.push('prism/parametric-ratchet/1 planted-defect self-check failed');
+    }
   }
 
   // Replay full zero-import wasm32 verification on the emitted dist/app.holo
@@ -158,7 +174,7 @@ export async function verifyAssembledPagesSite(
 
   const expectedVecs = CORE_WASM_ACCEPTANCE_VECTORS.length;
   console.log(
-    `weight-gate: PASS · precache v=${precache.version} (${precache.files.length} files) · app.holo=${holoReport.byteLength}B (${holoGzipBytes}B gz, ${expectedVecs}/${expectedVecs} Wasm vectors) · total=${(totalRawBytes / 1024).toFixed(1)} KiB raw / ${(totalGzipBytes / 1024).toFixed(1)} KiB gzip`,
+    `weight-gate: PASS · ratchet=0/0 (${ratchetReport.groundedLexModuleCount} lex, ${ratchetReport.auditedRustFileCount} rs) · precache v=${precache.version} (${precache.files.length} files) · app.holo=${holoReport.byteLength}B (${holoGzipBytes}B gz, ${expectedVecs}/${expectedVecs} Wasm vectors) · total=${(totalRawBytes / 1024).toFixed(1)} KiB raw / ${(totalGzipBytes / 1024).toFixed(1)} KiB gzip`,
   );
 
   return {
@@ -170,6 +186,7 @@ export async function verifyAssembledPagesSite(
     totalRawBytes,
     totalGzipBytes,
     vectorsPassed: expectedVecs,
+    ratchetVerified: ratchetReport.ok,
   };
 }
 

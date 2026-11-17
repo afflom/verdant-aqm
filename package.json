@@ -9,6 +9,7 @@
     "generate:notebooks": "tsx bootstrap/generate-notebooks.ts",
     "build:pages": "tsx bootstrap/generate-notebooks.ts && vite build && tsx bootstrap/assemble-pages.ts dist && tsx bootstrap/precache.ts dist",
     "verify:pages": "tsx bootstrap/weight-gate.ts dist",
+    "ratchet": "tsx bootstrap/ratchet-gate.ts",
     "kappa:key": "tsx ci/kappa-cache.ts key",
     "test": "tsx --test src/aqm/aqm.test.ts",
     "test:python": "python3 -m unittest discover -s python/qiskit-verdant-aqm/tests -v",

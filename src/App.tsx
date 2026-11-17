@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import {
   decodeVdntSnapshotToken,
-  encodeVdntSnapshotToken,
+  encodeUorcSnapshotToken,
   executeCircuitRollbackSession,
 } from './aqm/journal';
 import {
@@ -51,9 +51,9 @@ export default function App() {
   const [workspace, setWorkspace] = useState<ActiveWorkspace>('studio');
   const [atlasQecMode, setAtlasQecMode] = useState<'atlas' | 'qec'>('atlas');
 
-  // Initialize from #vdnt= URL hash if present, else canonical 3-Qubit GHZ + T manifold
+  // Initialize from #uorc= (or legacy #vdnt=) URL hash if present, else canonical 3-Qubit GHZ + T manifold
   const initialBoot = useMemo(() => {
-    if (typeof window !== 'undefined' && window.location.hash.startsWith('#vdnt=')) {
+    if (typeof window !== 'undefined' && /^#(uorc|vdnt)=/.test(window.location.hash)) {
       const parsed = decodeVdntSnapshotToken(window.location.hash);
       if (parsed.ok) {
         return parsed.value;
@@ -220,8 +220,8 @@ export default function App() {
 
   const handleShareSnapshot = () => {
     try {
-      const token = encodeVdntSnapshotToken({ spec, cursor });
-      const hashUrl = `#vdnt=${token}`;
+      const token = encodeUorcSnapshotToken({ spec, cursor });
+      const hashUrl = `#uorc=${token}`;
       if (typeof window !== 'undefined') {
         window.history.replaceState(null, '', hashUrl);
         const fullUrl = `${window.location.origin}${window.location.pathname}${hashUrl}`;
@@ -229,10 +229,10 @@ export default function App() {
           void navigator.clipboard.writeText(fullUrl).catch(() => {});
         }
       }
-      setSnapshotNotice(`VDNT snapshot written to URL (${token.slice(0, 22)}...)`);
+      setSnapshotNotice(`UORC snapshot sealed to URL (${token.slice(0, 22)}...)`);
       window.setTimeout(() => setSnapshotNotice(null), 4500);
     } catch (err) {
-      setSnapshotNotice(err instanceof Error ? err.message : 'Snapshot exceeds URL ceiling');
+      setSnapshotNotice(err instanceof Error ? err.message : 'UORC snapshot exceeds URL ceiling');
       window.setTimeout(() => setSnapshotNotice(null), 4500);
     }
   };
@@ -318,7 +318,7 @@ export default function App() {
             onClick={handleShareSnapshot}
             className="h-9 px-4 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 transition-colors whitespace-nowrap shrink-0"
           >
-            Share VDNT State
+            Share #uorc= State
           </button>
         </div>
       </header>

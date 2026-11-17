@@ -13,7 +13,13 @@ import random
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from .backend import PackedStabilizerTableau, VerdantAqmBackend, normalize_circuit
+from .backend import (
+    ExactMpsTensorTrain,
+    PackedStabilizerTableau,
+    VerdantAqmBackend,
+    compute_exact_mps_pauli_expectation,
+    normalize_circuit,
+)
 from .holo_bridge import compute_job_kappa
 
 
@@ -156,6 +162,121 @@ def _compute_pauli_expectation_sparse(
     return acc
 
 
+def _compute_pauli_expectation_clifford_adjoint(
+    steps: Sequence[tuple[str, tuple[int, ...]]],
+    num_qubits: int,
+    pauli_label: str,
+) -> float:
+    """Exact `O(|gates| + |support|)` Heisenberg adjoint Pauli conjugator (`<0 | U^dagger P U | 0>`).
+
+    Evaluates 100,000+ qubit Clifford `SparsePauliOp` observables in milliseconds without `n x n` tableau allocation!
+    """
+    p_str = pauli_label.strip().upper()
+    if len(p_str) != num_qubits:
+        raise ValueError(f"Pauli observable '{p_str}' length ({len(p_str)}) != {num_qubits}")
+
+    # Sparse active wire dictionaries so even 100,000-qubit observables with sparse non-I Paulis stay O(1) memory!
+    px: dict[int, int] = {}
+    pz: dict[int, int] = {}
+    phase_mod4 = 0  # 0:+1, 1:+i, 2:-1, 3:-i  (P = i^phase_mod4 * prod_q X^{px[q]} Z^{pz[q]})
+
+    for idx, ch in enumerate(p_str):
+        if ch == "I":
+            continue
+        q = num_qubits - 1 - idx
+        if ch == "X":
+            px[q] = 1
+        elif ch == "Z":
+            pz[q] = 1
+        elif ch == "Y":
+            px[q] = 1
+            pz[q] = 1
+            phase_mod4 = (phase_mod4 + 1) & 3
+        else:
+            raise ValueError(f"Unsupported Pauli character '{ch}' in '{p_str}'.")
+
+    for op, qs in reversed(steps):
+        q0 = qs[0]
+        if op == "h":
+            x0, z0 = px.get(q0, 0), pz.get(q0, 0)
+            if x0 and z0:
+                phase_mod4 = (phase_mod4 + 2) & 3
+            if z0:
+                px[q0] = 1
+            else:
+                px.pop(q0, None)
+            if x0:
+                pz[q0] = 1
+            else:
+                pz.pop(q0, None)
+        elif op == "s":
+            if px.get(q0, 0):
+                phase_mod4 = (phase_mod4 + 3) & 3
+                if pz.get(q0, 0):
+                    pz.pop(q0, None)
+                else:
+                    pz[q0] = 1
+        elif op == "x":
+            if pz.get(q0, 0):
+                phase_mod4 = (phase_mod4 + 2) & 3
+        elif op == "z":
+            if px.get(q0, 0):
+                phase_mod4 = (phase_mod4 + 2) & 3
+        elif op == "y":
+            if px.get(q0, 0) ^ pz.get(q0, 0):
+                phase_mod4 = (phase_mod4 + 2) & 3
+        elif op == "cx":
+            c, t = qs[0], qs[1]
+            xc = px.get(c, 0)
+            zt = pz.get(t, 0)
+            if zt:
+                if pz.get(c, 0):
+                    pz.pop(c, None)
+                else:
+                    pz[c] = 1
+            if xc:
+                if px.get(t, 0):
+                    px.pop(t, None)
+                else:
+                    px[t] = 1
+        elif op == "cz":
+            a, b = qs[0], qs[1]
+            xa = px.get(a, 0)
+            xb = px.get(b, 0)
+            if xa and xb:
+                phase_mod4 = (phase_mod4 + 2) & 3
+            if xb:
+                if pz.get(a, 0):
+                    pz.pop(a, None)
+                else:
+                    pz[a] = 1
+            if xa:
+                if pz.get(b, 0):
+                    pz.pop(b, None)
+                else:
+                    pz[b] = 1
+        elif op == "swap":
+            a, b = qs[0], qs[1]
+            xa, xb = px.pop(a, 0), px.pop(b, 0)
+            if xb:
+                px[a] = 1
+            if xa:
+                px[b] = 1
+            za, zb = pz.pop(a, 0), pz.pop(b, 0)
+            if zb:
+                pz[a] = 1
+            if za:
+                pz[b] = 1
+
+    if px:
+        return 0.0
+    if phase_mod4 == 0:
+        return 1.0
+    if phase_mod4 == 2:
+        return -1.0
+    return 0.0
+
+
 def _compute_pauli_expectation_stabilizer(
     tab: PackedStabilizerTableau, pauli_label: str
 ) -> float:
@@ -164,7 +285,6 @@ def _compute_pauli_expectation_stabilizer(
     if len(p_str) != n:
         raise ValueError(f"Pauli observable '{p_str}' length ({len(p_str)}) != {n}")
 
-    # Check if observable anticommutes with any stabilizer row n..2n-1 -> expectation is strictly 0.0!
     obs_x: list[int] = [0] * n
     obs_z: list[int] = [0] * n
     for q in range(n):
@@ -183,7 +303,6 @@ def _compute_pauli_expectation_stabilizer(
     if stab_anti != 0:
         return 0.0
 
-    # Otherwise P is in +-S: multiply stabilizers matching anticommuting destabilizers!
     dest_anti = 0
     for q in range(n):
         if obs_x[q]:
@@ -270,18 +389,20 @@ class VerdantAqmSamplerV2:
 
             norm_qc = normalize_circuit(qc_raw)
             eff_shots = pub_shots or shots or self.default_shots
-            bind_map = _normalize_param_sweeps(norm_qc.parameters, param_vals)[0]
+            sweeps = _normalize_param_sweeps(norm_qc.parameters, param_vals)
             res = self.backend.run(
-                norm_qc, shots=eff_shots, memory=True, parameter_binds=[bind_map]
+                norm_qc, shots=eff_shots, memory=True, parameter_binds=sweeps
             ).result()
             exp = res.results[0]
-            mem = res.get_memory(0)
-            ba = BitArray(mem, norm_qc.num_clbits)
+            all_mem: list[str] = []
+            for b_idx in range(len(res.results)):
+                all_mem.extend(res.get_memory(b_idx))
+            ba = BitArray(all_mem, norm_qc.num_clbits)
             pub_results.append(
                 PubResult(
                     data=DataBin(meas=ba, c=ba),
                     metadata={
-                        "shots": eff_shots,
+                        "shots": eff_shots * len(sweeps),
                         "substrate": exp.metadata["substrate"],
                         "holo_kappa": exp.metadata["holo_kappa"],
                     },
@@ -336,7 +457,13 @@ class VerdantAqmEstimatorV2:
                     exact_ev = 0.0
                     var_sum = 0.0
                     for p_lbl, coeff in terms:
-                        if isinstance(state_obj, PackedStabilizerTableau):
+                        if isinstance(state_obj, list):
+                            texp = _compute_pauli_expectation_clifford_adjoint(
+                                state_obj, norm_qc.num_qubits, p_lbl
+                            )
+                        elif isinstance(state_obj, ExactMpsTensorTrain):
+                            texp = compute_exact_mps_pauli_expectation(state_obj, p_lbl)
+                        elif isinstance(state_obj, PackedStabilizerTableau):
                             texp = _compute_pauli_expectation_stabilizer(state_obj, p_lbl)
                         else:
                             texp = _compute_pauli_expectation_sparse(state_obj, norm_qc.num_qubits, p_lbl)

@@ -32,6 +32,17 @@ import {
   dispatchCoreWasmQuery,
   runAllAcceptanceVectors,
 } from '../aqm/prismKernel';
+import {
+  evaluateParametricRatchet,
+  verifyParametricRatchetPlantedDefects,
+} from '../aqm/ratchet';
+import {
+  BUNDLED_RATCHET_WORKSPACE,
+  foundationBytesLexRaw,
+  ontologyRootLexRaw,
+  ratchetTomlRaw,
+  rustUorcRaw,
+} from '../aqm/ratchetBundle';
 import { AQM_STRATA_CERTIFICATES, CORE_WASM_REQUEST_MAX_BYTES } from '../aqm/stratum0';
 import { AqmCircuitSpec, PlantedDefectResult } from '../aqm/types';
 import { WorkerHoloBootSummary } from '../aqm/verifierWorker';
@@ -51,6 +62,8 @@ const ARTIFACT_FILES: ReadonlyArray<{
   readonly label: string;
   readonly content: string;
 }> = [
+  { key: 'ontology', label: 'Ontology/Model.lex.tex', content: ontologyRootLexRaw },
+  { key: 'bytes', label: 'Foundation/Bytes.lex.tex', content: foundationBytesLexRaw },
   { key: 'quantum', label: 'Quantum.lex.tex', content: quantumLexSource },
   { key: 'architecture', label: 'Architecture.lex.tex', content: architectureLexSource },
   { key: 'design', label: 'Design.lex.tex', content: designLexSource },
@@ -59,6 +72,7 @@ const ARTIFACT_FILES: ReadonlyArray<{
   { key: 'quality', label: 'Quality.lex.tex', content: qualityLexSource },
   { key: 'compliance', label: 'Compliance.lex.tex', content: complianceLexSource },
   { key: 'honesty', label: 'Honesty.lex.tex', content: honestyLexSource },
+  { key: 'ratchet', label: 'model/parametric-ratchet.toml', content: ratchetTomlRaw },
   { key: 'conformance', label: 'CONFORMANCE.md', content: conformanceSource },
   { key: 'upstream', label: 'upstream.toml', content: upstreamTomlSource },
   { key: 'ids', label: 'model/ids.toml', content: modelIdsSource },
@@ -66,6 +80,7 @@ const ARTIFACT_FILES: ReadonlyArray<{
   { key: 'gherkin', label: 'aqm.feature', content: gherkinSuiteSource },
   { key: 'advantage', label: 'advantage.feature', content: advantageFeatureSource },
   { key: 'rust', label: 'verdant-aqm/lib.rs', content: rustLibSource },
+  { key: 'rust-uorc', label: 'verdant-aqm/uorc.rs', content: rustUorcRaw },
 ];
 
 export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
@@ -190,7 +205,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
   };
 
   const handleDownloadHoloArchive = () => {
-    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21');
+    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.3.0:10-modules:AQ-01..AQ-23');
     const copyBuf = new ArrayBuffer(built.archiveBytes.byteLength);
     new Uint8Array(copyBuf).set(built.archiveBytes);
     const blob = new Blob([copyBuf], { type: 'application/octet-stream' });
@@ -230,6 +245,12 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
     const tropOk = trop.dist[2] === 2 && trop.nextHop[2] === 1;
 
     return { commOk, gemvOut: gemv.out[0], gemvOk, tropDist02: trop.dist[2], tropOk };
+  }, []);
+
+  const ratchetAudit = React.useMemo(() => {
+    const report = evaluateParametricRatchet(BUNDLED_RATCHET_WORKSPACE);
+    const planted = verifyParametricRatchetPlantedDefects(BUNDLED_RATCHET_WORKSPACE);
+    return { report, planted };
   }, []);
 
   const queryByteLen = new TextEncoder().encode(queryInput).byteLength;
@@ -493,10 +514,10 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                 </p>
               </div>
 
-              <span className="px-2.5 py-1 rounded-md text-xs font-mono bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300">
+              <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
                 {workerIdentity?.zeroImportsVerified
-                  ? '● Zero-Import Wasm Sandbox Verified'
-                  : '● Constructive Kernel Active'}
+                  ? 'Zero-Import Wasm Sandbox Verified'
+                  : 'Constructive Kernel Active'}
               </span>
             </div>
 
@@ -535,9 +556,86 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               </span>
               <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
                 {wasmKernelParity.commOk && wasmKernelParity.gemvOk && wasmKernelParity.tropOk
-                  ? `● Live Wasm Kernel Parity Verified (GEMV=${String(wasmKernelParity.gemvOut)}, d₀₂=${wasmKernelParity.tropDist02})`
-                  : '▲ Kernel Parity Mismatch'}
+                  ? `Live Wasm Kernel Parity Verified (GEMV=${String(wasmKernelParity.gemvOut)}, d₀₂=${wasmKernelParity.tropDist02})`
+                  : 'Kernel Parity Mismatch'}
               </span>
+            </div>
+          </div>
+
+          {/* Permanent Zero-Constants Parametric Ratchet (FI-08 · prism/parametric-ratchet/1 · AQ-23) */}
+          <div className="p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Permanent Zero-Constants Parametric Ratchet (FI-08 · {ratchetAudit.report.spec} · AQ-23)
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                  <span>{ratchetAudit.report.groundedLexModuleCount} Grounded .lex.tex Modules</span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>{ratchetAudit.report.auditedRustFileCount} Rust Engine Sources</span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>
+                    Planted Self-Checks: {ratchetAudit.planted.casesVerified}/{ratchetAudit.planted.casesVerified}{' '}
+                    {ratchetAudit.planted.allCaughtAndRestored ? 'Caught & Restored' : 'Failed'}
+                  </span>
+                </p>
+              </div>
+              <div
+                className={`text-xs font-mono tabular-nums font-semibold ${
+                  ratchetAudit.report.ok
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                }`}
+              >
+                {ratchetAudit.report.ok
+                  ? 'All 6 Zero Ceilings Locked (0 / 0)'
+                  : `${ratchetAudit.report.violations.length} Ratchet Violation(s)`}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs font-mono tabular-nums">
+              {[
+                [
+                  'Ontology > 1',
+                  ratchetAudit.report.counts.ontologyRootLiteralGtOneCount,
+                  ratchetAudit.report.ceilings.max_ontology_root_literal_gt_one_count,
+                ],
+                [
+                  'Ontology String',
+                  ratchetAudit.report.counts.ontologyRootStringFieldCount,
+                  ratchetAudit.report.ceilings.max_ontology_root_string_field_count,
+                ],
+                [
+                  'Classical.choice',
+                  ratchetAudit.report.counts.classicalChoiceCount,
+                  ratchetAudit.report.ceilings.max_classical_choice_count,
+                ],
+                [
+                  'Ungrounded Lex',
+                  ratchetAudit.report.counts.ungroundedLexModuleCount,
+                  ratchetAudit.report.ceilings.max_ungrounded_lex_module_count,
+                ],
+                [
+                  'Domain Lex > 1',
+                  ratchetAudit.report.counts.domainLexMagicLiteralCount,
+                  ratchetAudit.report.ceilings.max_domain_lex_magic_literal_count,
+                ],
+                [
+                  'Rust Engine > 1',
+                  ratchetAudit.report.counts.engineRustMagicLiteralCount,
+                  ratchetAudit.report.ceilings.max_engine_rust_magic_literal_count,
+                ],
+              ].map(([label, actual, ceiling]) => (
+                <div
+                  key={String(label)}
+                  className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
+                >
+                  <div className="text-slate-500 truncate">{label}</div>
+                  <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400">
+                    {actual} / {ceiling}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

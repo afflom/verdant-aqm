@@ -38,7 +38,7 @@
 | `seed_simulator` | `None` | `int \| None` | Deterministic PRNG seed for reproducible `get_counts()` and `get_memory()`. |
 | `memory` | `False` | `bool` | When `True`, records ordered per-shot bitstrings in `Result.get_memory()`. |
 | `prism_fusion` | `True` | `bool` | Applies `AQ-17` $\mathbb{Z}_8$ phase-monoid gate fusion prior to contraction. |
-| `substrate` | `"auto"` | `"auto" \| "StabilizerTableau" \| "CyclotomicExact" \| "ExactSparseContinuum"` | Overrides automatic substrate routing when set explicitly. |
+| `substrate` | `"auto"` | `"auto" \| "StabilizerTableau" \| "CyclotomicExact" \| "ExactMps" \| "ExactSparseContinuum" \| "AtlasHolospace"` | Overrides automatic substrate routing when set explicitly. |
 | `weave_atlas` | `False` | `bool` | Synthesizes `SkWeaver` $PU(22)$ topological braid diagnostics for continuous rotations (`AQ-16`). |
 | `max_shots` | `None` | `int \| None` | Optional upper shot bound used by Qiskit option-validator suites. |
 
