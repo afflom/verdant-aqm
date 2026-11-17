@@ -20,7 +20,10 @@ inductive{
     {name: iso19450OpmProcessModel, fields: []},
     {name: uml251LifecycleTransitions, fields: []},
     {name: openQasm2TopologicalCompilation, fields: []},
-    {name: coreWasmZeroImportWorldV1, fields: []}
+    {name: coreWasmZeroImportWorldV1, fields: []},
+    {name: qiskitBackendV2AndPrimitivesV2, fields: []},
+    {name: jupyterNbformatV45Schema, fields: []},
+    {name: prismDevRelDiataxisStandard, fields: []}
   ]
 }
 
@@ -36,14 +39,18 @@ definition{
     | NormativeObligation.iso19450OpmProcessModel => true
     | NormativeObligation.uml251LifecycleTransitions => true
     | NormativeObligation.openQasm2TopologicalCompilation => true
-    | NormativeObligation.coreWasmZeroImportWorldV1 => true),
+    | NormativeObligation.coreWasmZeroImportWorldV1 => true
+    | NormativeObligation.qiskitBackendV2AndPrimitivesV2 => true
+    | NormativeObligation.jupyterNbformatV45Schema => true
+    | NormativeObligation.prismDevRelDiataxisStandard => true),
   axioms: []
 }
 
 theorem{
   name: everyObligationEvidenced,
-  statement: (((obligationEvidenced NormativeObligation.blake3HoloV4ContentAddressing) = true)
-    ∧ ((obligationEvidenced NormativeObligation.coreWasmZeroImportWorldV1) = true)),
+  statement: ((((obligationEvidenced NormativeObligation.blake3HoloV4ContentAddressing) = true)
+    ∧ ((obligationEvidenced NormativeObligation.coreWasmZeroImportWorldV1) = true))
+    ∧ ((obligationEvidenced NormativeObligation.qiskitBackendV2AndPrimitivesV2) = true)),
   proof: decide{},
   axioms: []
 }

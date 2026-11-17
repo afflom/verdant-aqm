@@ -22,6 +22,9 @@ guarded_runtime_modules = [
   "src/aqm/atlasUtqc.ts",
   "src/aqm/codedMatmul.ts",
   "src/aqm/holoGuest.ts",
+  "src/aqm/qiskitBackend.ts",
+  "src/aqm/qiskitOracle.ts",
+  "src/aqm/devrelGuides.ts",
 ]
 
 [strata]

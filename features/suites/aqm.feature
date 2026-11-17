@@ -1,4 +1,4 @@
-Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (AQ-01..AQ-16)
+Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (AQ-01..AQ-21)
 
   Scenario: AQ-01 Constructive Stratum 0 powers of two, BLAKE3 kappa, and BoundedBuffer limits
     Given Stratum 0 derives powers of two constructively from {0, 1}
@@ -50,7 +50,14 @@ Feature: Verdant Abstract Quantum Machine (AQM) Full-Stratum Prism Conformance (
     When verifying Pentagon, Hexagon, Balancing, and (ST)^3 = p^+ S^2 axioms and weaving Certified22 Euler braids
     Then all MTC residuals lie below 1e-11, Certified22 braids satisfy measured SU(2) accuracy, and Clifford carriers refuse non-discrete angles
 
-  Scenario: AQ-15 & AQ-16 Real Hologram v4 zero-import Core-Wasm guest, uor-matmul zero-decode, and UTQC Row-Honesty
+  Scenario: AQ-15, AQ-16, AQ-17 & AQ-18 Real Hologram v4 zero-import Core-Wasm guest, monoid gate fusion, and UTQC Row-Honesty
     Given the BLAKE3-sealed VerdantAqm.holo v4 archive and zero-import wasm32 guest
-    When compiling via WebAssembly.compile, running all 24 vectors via holo_run, and auditing ledger rows
-    Then all 24 Wasm guest vectors pass and benchmark-as-proof inflation is refused with HonestyVerdict::RefuseBenchMarkedAsProof
+    When compiling via WebAssembly.compile, running all 32 vectors via holo_run, and auditing ledger rows
+    Then all 32 Wasm guest vectors pass and benchmark-as-proof inflation is refused with HonestyVerdict::RefuseBenchMarkedAsProof
+
+  Scenario: AQ-19, AQ-20 & AQ-21 Commercial Qiskit BackendV2, Primitives V2, authoritative Qiskit oracle, and prism-devrel publication
+    Given the unbounded VerdantAqmBackend, VerdantAqmSamplerV2, VerdantAqmEstimatorV2, and SHA-256-locked Qiskit/qiskit oracle
+    When running the authoritative Qiskit BackendV2/SamplerV2/EstimatorV2 oracle suite, Jupyter notebooks, and devrel-publish-gate
+    Then 4,096-qubit GHZ, multi-clbit measurement layouts, continuous rotations, and SparsePauliOp expectations match Qiskit's analytical oracle to < 1e-12
+    And arbitrary classical qubit caps or unverified notebook outputs are refused
+

@@ -79,5 +79,43 @@ theorem{
   axioms: []
 }
 
+inductive{
+  name: DevRelPublishOutcome,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: publishCatalogAndSdk, fields: []},
+    {name: regenerateFromPinnedSubject, fields: []},
+    {name: refuseMisstatedOrUnverified, fields: []}
+  ]
+}
+
+definition{
+  name: evaluateDevRelPublishGate,
+  parameters: [
+    uncoveredRecords : Nat,
+    undeclaredCovers : Nat,
+    unverifiedNotebooks : Nat,
+    pinIsCurrent : Bool
+  ],
+  result: DevRelPublishOutcome,
+  body: (if ((1 <=? undeclaredCovers) || ((1 <=? uncoveredRecords) || (1 <=? unverifiedNotebooks)))
+    then DevRelPublishOutcome.refuseMisstatedOrUnverified
+    else (if (not pinIsCurrent)
+      then DevRelPublishOutcome.regenerateFromPinnedSubject
+      else DevRelPublishOutcome.publishCatalogAndSdk)),
+  axioms: []
+}
+
+theorem{
+  name: inv004DevRelRefusesUncoveredOrUnverified,
+  statement: ((((evaluateDevRelPublishGate 0 0 0 true) = DevRelPublishOutcome.publishCatalogAndSdk)
+    ∧ ((evaluateDevRelPublishGate 0 0 0 false) = DevRelPublishOutcome.regenerateFromPinnedSubject))
+    ∧ (((evaluateDevRelPublishGate 1 0 0 true) = DevRelPublishOutcome.refuseMisstatedOrUnverified)
+      ∧ ((evaluateDevRelPublishGate 0 0 1 true) = DevRelPublishOutcome.refuseMisstatedOrUnverified))),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}

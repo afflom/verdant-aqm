@@ -804,7 +804,7 @@ export interface HoloV4VerificationReport {
   readonly exportedSymbols: readonly string[];
 }
 
-export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.2.0:8-facets:AQ-01..AQ-18'): {
+export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21'): {
   archiveBytes: Uint8Array;
   archiveFingerprint: string;
   wasmBytes: Uint8Array;
@@ -817,8 +817,9 @@ export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.2
   const requiresJson = enc.encode(
     JSON.stringify({
       world: 'hologram:guest/core-wasm@1',
-      capabilities: ['AQ-01..AQ-18'],
+      capabilities: ['AQ-01..AQ-21'],
       zeroImports: true,
+      qiskitBackend: 'BackendV2+PrimitivesV2',
       computeKernels: [
         'wasm_symplectic_commute',
         'wasm_coded_packed4_gemv',
@@ -840,10 +841,11 @@ export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.2
   const metadataBytes = enc.encode(
     JSON.stringify({
       name: 'verdant-aqm',
-      version: '0.2.0',
+      version: '0.3.0',
       holoVersion: HOLO_VERSION,
       facets: 8,
       wasmExports: 6,
+      vectors: CORE_WASM_ACCEPTANCE_VECTORS.length,
     }),
   );
   const extPrismModel = enc.encode(`prismpm-model/v1\0${modelSourcesSummary}`);

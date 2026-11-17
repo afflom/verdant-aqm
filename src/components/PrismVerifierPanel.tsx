@@ -18,6 +18,7 @@ import siteAppJsonSource from '@/site/app.json?raw';
 import kappaCacheSource from '@/ci/kappa-cache.ts?raw';
 import precacheScriptSource from '@/bootstrap/precache.ts?raw';
 import serviceWorkerSource from '@/public/sw.js?raw';
+import upstreamTomlSource from '@/upstream.toml?raw';
 import {
   buildVerdantAqmHoloArchive,
   runWasmPacked4Gemv,
@@ -59,6 +60,7 @@ const ARTIFACT_FILES: ReadonlyArray<{
   { key: 'compliance', label: 'Compliance.lex.tex', content: complianceLexSource },
   { key: 'honesty', label: 'Honesty.lex.tex', content: honestyLexSource },
   { key: 'conformance', label: 'CONFORMANCE.md', content: conformanceSource },
+  { key: 'upstream', label: 'upstream.toml', content: upstreamTomlSource },
   { key: 'ids', label: 'model/ids.toml', content: modelIdsSource },
   { key: 'ledger', label: 'model/ledger.toml', content: modelLedgerSource },
   { key: 'gherkin', label: 'aqm.feature', content: gherkinSuiteSource },
@@ -188,7 +190,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
   };
 
   const handleDownloadHoloArchive = () => {
-    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.2.0:8-facets:AQ-01..AQ-18');
+    const built = buildVerdantAqmHoloArchive('VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21');
     const copyBuf = new ArrayBuffer(built.archiveBytes.byteLength);
     new Uint8Array(copyBuf).set(built.archiveBytes);
     const blob = new Blob([copyBuf], { type: 'application/octet-stream' });

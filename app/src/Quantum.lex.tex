@@ -314,6 +314,35 @@ theorem{
   axioms: []
 }
 
+inductive{
+  name: QiskitBackendError,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: arbitraryClassicalQubitCapImposed, fields: []},
+    {name: invalidShotsOptionBounds, fields: []},
+    {name: unsupportedTargetInstruction, fields: []},
+    {name: malformedPauliObservableArity, fields: []}
+  ]
+}
+
+definition{
+  name: qiskitTargetUnboundedValid,
+  parameters: [hasArbitraryQubitCeiling : Bool, requestedQubits : Nat, shots : Nat],
+  result: Bool,
+  body: (((not hasArbitraryQubitCeiling) && ((natOne) <=? requestedQubits)) && ((natOne) <=? shots)),
+  axioms: []
+}
+
+theorem{
+  name: inv012QiskitBackendRefusesClassicalCap,
+  statement: (((qiskitTargetUnboundedValid false (Foundation.Ontology.V1.Model::pow2Constructive ((natEight) + (natFour))) (natSixtyFour)) = true)
+    ∧ ((qiskitTargetUnboundedValid true ((natTwentyFour) + (natFour)) (natSixtyFour)) = false)),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}
+
 

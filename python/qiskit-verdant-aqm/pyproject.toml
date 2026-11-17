@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qiskit-verdant-aqm"
+version = "0.3.0"
+description = "Prism-verified unbounded Qiskit BackendV2, SamplerV2, and EstimatorV2 powered by Verdant AQM (Sparse Z[zeta_8], F_2 Symplectic Tableau, Q(zeta_8) MPS, and UOR Atlas)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Verdant AQM & Prism Contributors" }
+]
+keywords = [
+  "quantum-computing",
+  "qiskit",
+  "backend-v2",
+  "primitives-v2",
+  "cyclotomic",
+  "stabilizer",
+  "prism",
+  "formal-verification"
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Physics"
+]
+dependencies = [
+  "qiskit>=1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "jupyter>=1.0.0",
+  "nbconvert>=7.14.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/afflom/verdant-aqm"
+Documentation = "https://afflom.github.io/verdant-aqm/"
+Repository = "https://github.com/afflom/verdant-aqm"
+UpstreamEngine = "https://github.com/afflom/verdant-engine"
+PrismDevRel = "https://github.com/afflom/prism-devrel"
+
+[project.entry-points."qiskit.backends"]
+verdant_aqm_prism = "qiskit_verdant_aqm:VerdantAqmBackend"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qiskit_verdant_aqm*"]
+
+[tool.setuptools.package-data]
+qiskit_verdant_aqm = ["py.typed"]

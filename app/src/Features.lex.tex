@@ -3,7 +3,7 @@
 \useglossary{lexlean.std.nat@1.2.0}
 \useglossary{prism.arch@1.0.0}
 \importmodule{Architecture}
-\title{Verdant AQM capability register AQ-01..AQ-16 and stakeholder journey coverage}
+\title{Verdant AQM capability register AQ-01..AQ-21 and stakeholder journey coverage}
 
 \begin{semanticmodule}
 
@@ -27,7 +27,12 @@ inductive{
     {name: aq13AtlasMtcAndHoloBraid, fields: []},
     {name: aq14OpenQasmSkWeaverCompiler, fields: []},
     {name: aq15HoloV4RealCoreWasmGuest, fields: []},
-    {name: aq16ZeroDecodeMatmulAndHonesty, fields: []}
+    {name: aq16ZeroDecodeMatmulAndHonesty, fields: []},
+    {name: aq17PrismMonoidGateFusion, fields: []},
+    {name: aq18ZeroImportWasmComputeKernels, fields: []},
+    {name: aq19QiskitBackendV2Unbounded, fields: []},
+    {name: aq20QiskitPrimitivesV2Exact, fields: []},
+    {name: aq21QiskitOracleAndDevRelPublish, fields: []}
   ]
 }
 
@@ -51,16 +56,23 @@ definition{
     | CapabilityId.aq13AtlasMtcAndHoloBraid => Stakeholder.qecTopologicalResearcher
     | CapabilityId.aq14OpenQasmSkWeaverCompiler => Stakeholder.quantumAlgorithmEngineer
     | CapabilityId.aq15HoloV4RealCoreWasmGuest => Stakeholder.formalVerificationAuditor
-    | CapabilityId.aq16ZeroDecodeMatmulAndHonesty => Stakeholder.formalVerificationAuditor),
+    | CapabilityId.aq16ZeroDecodeMatmulAndHonesty => Stakeholder.formalVerificationAuditor
+    | CapabilityId.aq17PrismMonoidGateFusion => Stakeholder.quantumAlgorithmEngineer
+    | CapabilityId.aq18ZeroImportWasmComputeKernels => Stakeholder.browserRuntimeOperator
+    | CapabilityId.aq19QiskitBackendV2Unbounded => Stakeholder.qiskitSdkAndDevRelUser
+    | CapabilityId.aq20QiskitPrimitivesV2Exact => Stakeholder.qiskitSdkAndDevRelUser
+    | CapabilityId.aq21QiskitOracleAndDevRelPublish => Stakeholder.qiskitSdkAndDevRelUser),
   axioms: []
 }
 
 theorem{
   name: everyFeatureJourneyed,
-  statement: (((capabilityOwnerStakeholder CapabilityId.aq13AtlasMtcAndHoloBraid)
+  statement: ((((capabilityOwnerStakeholder CapabilityId.aq13AtlasMtcAndHoloBraid)
       = Stakeholder.qecTopologicalResearcher)
     ∧ ((capabilityOwnerStakeholder CapabilityId.aq15HoloV4RealCoreWasmGuest)
-      = Stakeholder.formalVerificationAuditor)),
+      = Stakeholder.formalVerificationAuditor))
+    ∧ ((capabilityOwnerStakeholder CapabilityId.aq19QiskitBackendV2Unbounded)
+      = Stakeholder.qiskitSdkAndDevRelUser)),
   proof: decide{},
   axioms: []
 }

@@ -1,0 +1,94 @@
+name: Qiskit BackendV2 & Notebooks Oracle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qiskit-oracle-matrix:
+    name: Verify VerdantAqmBackend vs Upstream Qiskit Oracle
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify standalone zero-dependency Python Qiskit oracle
+        run: python3 -m unittest discover -s python/qiskit-verdant-aqm/tests -v
+
+      - name: Install upstream Qiskit, pytest, jupyter & editable qiskit-verdant-aqm
+        run: |
+          python -m pip install --upgrade pip build
+          python -m pip install -e "./python/qiskit-verdant-aqm[dev]"
+
+      - name: Verify Qiskit transpiler Target, BackendV2, SamplerV2 & EstimatorV2 against upstream Qiskit
+        run: |
+          python - <<'PY'
+          from qiskit import QuantumCircuit, transpile
+          from qiskit.quantum_info import SparsePauliOp
+          from qiskit_verdant_aqm import (
+              HAS_UPSTREAM_QISKIT,
+              VerdantAqmBackend,
+              VerdantAqmEstimatorV2,
+              VerdantAqmProvider,
+              VerdantAqmSamplerV2,
+          )
+
+          assert HAS_UPSTREAM_QISKIT, "Expected upstream qiskit>=1.0 to be active"
+          backend = VerdantAqmProvider().get_backend("verdant_aqm_prism")
+          assert backend.num_qubits is None
+
+          # Verify native Qiskit transpile() preserves CCX & 4,096q Cat without SWAP decomposition
+          qc = QuantumCircuit(4096, 2)
+          qc.h(0)
+          for i in range(4095):
+              qc.cx(i, i + 1)
+          qc.t(0)
+          qc.t(4095)
+          qc.measure([0, 4095], [0, 1])
+
+          isa_qc = transpile(qc, backend=backend)
+          counts = backend.run(isa_qc, shots=256, seed_simulator=42).result().get_counts()
+          assert set(counts.keys()).issubset({"00", "11"}) and sum(counts.values()) == 256
+
+          # Verify upstream SparsePauliOp with VerdantAqmEstimatorV2
+          singlet = QuantumCircuit(2)
+          singlet.x(0); singlet.x(1); singlet.h(0); singlet.cx(0, 1)
+          op = SparsePauliOp.from_list([("XX", 1.0), ("YY", 1.0), ("ZZ", 1.0)])
+          ev = VerdantAqmEstimatorV2(default_precision=0.0).run([(singlet, op)]).result()[0].data.evs
+          assert abs(ev - (-3.0)) < 1e-13
+          print("Upstream Qiskit integration & 4,096q transpile PASS")
+          PY
+
+      - name: Run full pytest suite with upstream Qiskit installed
+        run: pytest python/qiskit-verdant-aqm/tests -v
+
+      - name: Build Python sdist & wheel distributions
+        run: python -m build python/qiskit-verdant-aqm
+
+      - name: Upload commercial Python sdist & wheel artifacts
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qiskit-verdant-aqm-dist
+          path: python/qiskit-verdant-aqm/dist/*

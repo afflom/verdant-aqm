@@ -144,3 +144,28 @@ statement = "Zero-import wasm32 Hologram v4 guest exports hardware i64.popcnt sy
 failure = "QuantumIsaError::PayloadExceedsBoundedBuffer"
 negative = "aqm:defect:oob"
 
+[[capabilities]]
+id = "AQ-19"
+level = "build"
+suite = "aqm"
+statement = "Commercial Qiskit BackendV2 (VerdantAqmBackend), dynamic all-to-all Target, and Provider execute Clifford+T, Toffoli/Fredkin, and continuous rotations (rx, ry, rz, p, u, rxx, rzz) with zero arbitrary qubit ceilings (num_qubits=None / dynamic n >= 1) and refuse contrived classical dense caps."
+failure = "QiskitBackendError::ArbitraryClassicalQubitCapImposed"
+negative = "aqm:defect:classical-cap"
+
+[[capabilities]]
+id = "AQ-20"
+level = "build"
+suite = "aqm"
+statement = "Qiskit Primitives V2 (VerdantAqmSamplerV2 & VerdantAqmEstimatorV2) execute PUB payloads with BitArray hex/bitstring counts, shot memory, parameter bindings, and exact analytical SparsePauliOp expectations without shot variance at precision=0.0."
+failure = "QiskitBackendError::MalformedPauliObservableArity"
+negative = "aqm:defect:pauli-arity"
+
+[[capabilities]]
+id = "AQ-21"
+level = "build"
+suite = "aqm"
+statement = "Authoritative external Qiskit/qiskit BackendV2 & Primitives V2 validation oracle (pinned in upstream.toml by SHA-256) and prism-devrel Diataxis guides + nbformat v4.5 Jupyter notebooks pass automated parity and devrel-publish-gate checks."
+failure = "DevRelPublishOutcome::RefuseMisstatedOrUnverified"
+negative = "aqm:defect:unverified-notebook"
+
+

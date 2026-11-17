@@ -55,3 +55,25 @@ title = "Atlas-Native Topological Quantum Computation over C(Z_3 x Z_2^3, q) and
 clause = "MTC Pentagon/Hexagon/Balancing + Certified22 spectral gap Delta_lambda = 3"
 facet = "Quantum.lex.tex, Honesty.lex.tex"
 evidence = "src/aqm/atlasUtqc.ts::verifyAtlasMtcAxioms + SkWeaver"
+
+[[authorities]]
+id = "QISKIT-BACKEND-V2"
+title = "Qiskit SDK 1.x/2.x Providers BackendV2, Target, SamplerV2, and EstimatorV2 Specification"
+clause = "qiskit.providers.BackendV2, qiskit.transpiler.Target, qiskit.primitives.{BaseSamplerV2,BaseEstimatorV2} (commit c68ee295b6fa403c67216eeb0f0fbbe12cc98b28)"
+facet = "Quantum.lex.tex, Compliance.lex.tex"
+evidence = "upstream.toml + vendor/qiskit-oracle/* + src/aqm/qiskitBackend.ts + python/qiskit-verdant-aqm/"
+
+[[authorities]]
+id = "JUPYTER-NBFORMAT-4-5"
+title = "Jupyter Notebook Format Specification v4.5 (Cell IDs, Kernel Metadata, Verified Execution Outputs)"
+clause = "nbformat 4.5 JSON Schema"
+facet = "Compliance.lex.tex, Honesty.lex.tex"
+evidence = "notebooks/*.ipynb + bootstrap/generate-notebooks.ts"
+
+[[authorities]]
+id = "PRISM-DEVREL-CS-01-11"
+title = "Prism-DevRel Content Standard CS-01..CS-11, Stakeholder Personas, and Diataxis Guide Architecture"
+clause = "afflom/prism-devrel scripts/content/standard.json & examples/devrel-publish-gate.prompt.json (commit ace153e37c7c29646f3efa6e273c3c4f8c9fb8bc)"
+facet = "Honesty.lex.tex, Compliance.lex.tex"
+evidence = "docs/** + src/aqm/devrelGuides.ts + Honesty::inv004DevRelRefusesUncoveredOrUnverified"
+

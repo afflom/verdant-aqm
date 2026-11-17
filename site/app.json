@@ -2,9 +2,9 @@
   "name": "Verdant AQM",
   "shortName": "VerdantAQM",
   "live": "https://afflom.github.io/verdant-aqm/",
-  "purpose": "Prism-verified Abstract Quantum Machine mechanized across 8 constructive strata, executing sparse Z[ζ₈] cyclotomic registers, exact Q(ζ₈) Galois-RREF MPS, column bit-plane F₂ stabilizer tableaus, Wasm-accelerated tropical (min, +) QEC decoding, and UOR Atlas topological braids.",
+  "purpose": "Prism-verified Abstract Quantum Machine and commercial Qiskit BackendV2 + Primitives V2 runtime mechanized across 8 constructive strata, executing unbounded sparse Z[ζ₈] cyclotomic registers, Q(ζ₈) Galois-RREF MPS, column bit-plane F₂ stabilizer tableaus, Wasm-accelerated tropical (min, +) QEC decoding, UOR Atlas topological braids, and Jupyter notebooks.",
   "inputLabel": "AQM Core-Wasm verification query",
-  "placeholder": "aqm:summary or aqm:fusion or aqm:wasm:kernels",
+  "placeholder": "aqm:summary or aqm:qiskit:backend or aqm:qiskit:oracle",
   "submitLabel": "Verify",
   "outputLabel": "AQM verdict",
   "answers": {
@@ -17,14 +17,14 @@
     "refusal": "invalid request"
   },
   "promise": {
-    "headline": "Zero-magic-constant quantum execution, algebraic gate-fusion, surface-code QEC, and topological braid synthesis in every browser.",
-    "detail": "Every quantum gate reduces to exact uor-matmul semiring contractions over sparse Z[ζ₈] kets, Q(ζ₈) Galois-norm RREF tensor trains, 32-row column bit-plane F₂ tableaus, zero-import wasm32 compute kernels, and 2-of-3 Stitch parity custody."
+    "headline": "Unbounded Qiskit BackendV2, Primitives V2, Jupyter notebooks, and zero-magic-constant quantum execution in Python and every browser.",
+    "detail": "Every Qiskit circuit and primitive PUB executes without artificial dense 2ⁿ qubit caps via exact uor-matmul semiring contractions, zero-import wasm32 compute kernels, and SHA-256-locked Qiskit/qiskit oracle verification."
   },
-  "claim": "AQ-15 & AQ-18: the zero-import wasm32 VerdantAqm.holo v4 guest answers conformant across all 26 pinned capability and planted-defect vectors, executes native i64.popcnt symplectic, Packed<Grid<16>,2> GEMV, and k7 Tropical (min, +) kernels in linear Wasm memory, and answers invalid request for unknown or >64-byte queries.",
+  "claim": "AQ-15, AQ-18 & AQ-19..AQ-21: the zero-import wasm32 VerdantAqm.holo v4 guest answers conformant across all 32 pinned capability and planted-defect vectors, validates unbounded Qiskit BackendV2 / SamplerV2 / EstimatorV2 parity against the SHA-256-pinned Qiskit/qiskit oracle, and enforces prism-devrel publication gates.",
   "proposition": {
     "name": "QuantumMachineLawfulAndConserved",
-    "text": "CircuitLinearAndAcyclic spec :=\n  DistinctGateWires spec.steps = true\n  /\\ KahnTopologicalAcyclic spec.steps = true\n\nPhaseOctantFusionIdentity a b :=\n  phaseOctantFusionMod8 a b = (a + b) % 8\n  /\\ phaseOctantFusionMod8 a (8 - (a % 8)) = 0\n\nConservationLedgerValid state :=\n  exactNormSquared Z[sqrt 2] state.support = state.normDenom",
-    "plain": "Every admitted quantum circuit satisfies wire-linearity (no-cloning) and Kahn DAG acyclicity, diagonal Z₈ phase gates fuse losslessly modulo 8 with exact involution cancellation, and sparse cyclotomic probability mass equals 1 identically without floating-point drift."
+    "text": "CircuitLinearAndAcyclic spec :=\n  DistinctGateWires spec.steps = true\n  /\\ KahnTopologicalAcyclic spec.steps = true\n\nQiskitTargetUnboundedValid cap n shots :=\n  not cap = true /\\ 1 <= n /\\ 1 <= shots\n\nConservationLedgerValid state :=\n  exactNormSquared Z[sqrt 2] state.support = state.normDenom",
+    "plain": "Every admitted quantum circuit satisfies wire-linearity (no-cloning) and Kahn DAG acyclicity, Qiskit BackendV2 refuses contrived classical qubit caps, and sparse cyclotomic probability mass equals 1 identically without floating-point drift."
   },
   "theorems": [
     {
@@ -46,28 +46,34 @@
       "where": "app/src/Quantum.lex.tex"
     },
     {
-      "name": "utqcRowHonestyEnforced",
-      "statement": "decideUtqcRowHonesty benchClaimedAsProof = refuseBenchMarkedAsProof",
-      "how": "Proved by constructive kernel evaluation separating peer-reviewed some-true theorems, build conformance gates, and open empirical benchmarks",
+      "name": "inv012QiskitBackendRefusesClassicalCap",
+      "statement": "qiskitTargetUnboundedValid false 4096 64 = true /\\ qiskitTargetUnboundedValid true 28 64 = false",
+      "how": "Proved by constructive kernel decision enforcing unbounded dynamic Target registers on VerdantAqmBackend",
+      "where": "app/src/Quantum.lex.tex"
+    },
+    {
+      "name": "inv004DevRelRefusesUncoveredOrUnverified",
+      "statement": "evaluateDevRelPublishGate 0 0 0 true = publishCatalogAndSdk",
+      "how": "Proved by constructive decision table enforcing 100% capability coverage, current upstream pins, and verified Jupyter notebooks",
       "where": "app/src/Honesty.lex.tex"
     },
     {
       "name": "coreWasmSandboxZeroImports",
-      "statement": "pinnedAcceptanceVectorCount = 26 /\\ pinnedWasmExportCount = 6",
-      "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 26/26 holo_run vector replay",
+      "statement": "pinnedAcceptanceVectorCount = 32 /\\ pinnedWasmExportCount = 6",
+      "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 32/32 holo_run vector replay",
       "where": "app/src/Quality.lex.tex"
     }
   ],
   "pinned": [
     {
-      "name": "aqm_core_wasm_26_vectors",
-      "what": "Verifies the compiled zero-import wasm32 VerdantAqm.holo v4 archive, 356-byte APP_MANIFEST, 32-byte BLAKE3 footer, 6 Wasm exports, and all 26 positive/defect holo_run vectors.",
+      "name": "aqm_core_wasm_32_vectors",
+      "what": "Verifies the compiled zero-import wasm32 VerdantAqm.holo v4 archive, 356-byte APP_MANIFEST, 32-byte BLAKE3 footer, 6 Wasm exports, and all 32 positive/defect holo_run vectors.",
       "where": "src/aqm/aqm.test.ts"
     },
     {
-      "name": "zero_constants_constructive_ratchet_aq_01",
-      "what": "Derives powers of two, primes, 64-byte BoundedBuffer request limits, 16x16 tile dimensions, and continued-fraction convergents constructively from {0, 1}.",
-      "where": "src/aqm/stratum0.ts"
+      "name": "qiskit_backend_v2_external_oracle",
+      "what": "Verifies VerdantAqmBackend, VerdantAqmSamplerV2, and VerdantAqmEstimatorV2 against SHA-256-locked Qiskit/qiskit test_backend_v2.py, test_basic_simulator.py, test_backend_sampler_v2.py, and test_backend_estimator_v2.py.",
+      "where": "upstream.toml, src/aqm/qiskitOracle.ts, python/qiskit-verdant-aqm/tests/test_qiskit_oracle.py"
     }
   ],
   "trusted": [
@@ -80,17 +86,17 @@
       "value": "hologram:guest/core-wasm@1 (0 imports, 6 exports, BLAKE3-pinned)"
     },
     {
-      "name": "Rust execution crate",
-      "value": "crates/verdant-aqm (#![forbid(unsafe_code)])"
+      "name": "Commercial Python & Browser Qiskit SDK",
+      "value": "python/qiskit-verdant-aqm/ (PEP 621 Apache-2.0) + notebooks/*.ipynb + docs/**"
     },
     {
       "name": "Your browser",
-      "value": "runs WebGL2/16x16-tile 3D Bloch & surface-code manifolds, WebAudio, and the isolated Core-Wasm worker"
+      "value": "runs WebGL2/16x16-tile 3D Bloch & surface-code manifolds, live Qiskit notebooks, and the isolated Core-Wasm worker"
     }
   ],
   "attestations": {
     "proof": {
-      "id": "verified across AQ-01..AQ-18 and 9 planted-defect refusal gates",
+      "id": "verified across AQ-01..AQ-21, Qiskit/qiskit external oracle, and 11 planted-defect refusal gates",
       "url": "https://github.com/afflom/verdant-aqm/blob/main/CONFORMANCE.md"
     },
     "build": {

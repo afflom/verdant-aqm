@@ -59,13 +59,27 @@ export enum HonestyVerdictErrorKind {
   RefuseLossyUorcChallenger = 'UorcAdmissionError::RefuseLossyReconstruction',
 }
 
+export enum QiskitBackendErrorKind {
+  ArbitraryClassicalQubitCapImposed = 'QiskitBackendError::ArbitraryClassicalQubitCapImposed',
+  InvalidShotsOptionBounds = 'QiskitBackendError::InvalidShotsOptionBounds',
+  UnsupportedTargetInstruction = 'QiskitBackendError::UnsupportedTargetInstruction',
+  MalformedPauliObservableArity = 'QiskitBackendError::MalformedPauliObservableArity',
+}
+
+export enum DevRelPublishErrorKind {
+  RefuseMisstatedOrUnverified = 'DevRelPublishOutcome::RefuseMisstatedOrUnverified',
+  RegenerateFromPinnedSubject = 'DevRelPublishOutcome::RegenerateFromPinnedSubject',
+}
+
 export type ModeledAqmErrorKind =
   | QuantumIsaErrorKind
   | UnitaryInvariantErrorKind
   | StabilizerErrorKind
   | AtlasBraidErrorKind
   | MeasurementJournalErrorKind
-  | HonestyVerdictErrorKind;
+  | HonestyVerdictErrorKind
+  | QiskitBackendErrorKind
+  | DevRelPublishErrorKind;
 
 export interface ModeledAqmError {
   readonly kind: ModeledAqmErrorKind;

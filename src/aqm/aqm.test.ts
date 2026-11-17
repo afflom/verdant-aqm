@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { assemblePagesSite } from '../../bootstrap/assemble-pages';
+import { generateAllJupyterNotebooks } from '../../bootstrap/generate-notebooks';
 import { buildPrecacheManifest } from '../../bootstrap/precache';
 import { verifyAssembledPagesSite } from '../../bootstrap/weight-gate';
 import { computeInputKappa } from '../../ci/kappa-cache';
@@ -71,14 +72,26 @@ import {
   stepExactMpsGate,
 } from './mps';
 import {
+  CANONICAL_NOTEBOOK_SPECS,
+  DIATAXIS_GUIDE_META,
+  PRISM_DEVREL_BANNED_FILLER,
+  PRISM_DEVREL_VAGUE_LINKS,
+  runDevRelContentAndPublishGateAudit,
+} from './devrelGuides';
+import {
   CORE_WASM_ACCEPTANCE_VECTORS,
   PLANTED_DEFECT_CATALOG,
   dispatchCoreWasmQuery,
+  evaluateDevRelPublishGatePrism,
   optimizeCircuitPrismMonoid,
   runAllAcceptanceVectors,
   verifyAndCompileCircuitPrism,
   verifyGateCommutationLegal,
 } from './prismKernel';
+import {
+  LOCKED_UPSTREAM_ORACLE_FILES,
+  runAuthoritativeQiskitOracleSuite,
+} from './qiskitOracle';
 import { sha256Hex } from './sha256';
 import { routePromptWithCodedSlm } from './slm';
 import {
@@ -478,8 +491,8 @@ test('AQ-07, AQ-08, AQ-09, AQ-10 & AQ-15: Rollback, Stitch parity, and REAL wasm
   assert.equal(reconstructFromStitchShards(bundle, [false, true, true]).integrityVerified, true);
 
   assert.equal(routePromptWithCodedSlm('clone q0 onto q0').admitted, false);
-  assert.equal(runAllAcceptanceVectors().passed, 26);
-  assert.equal(PLANTED_DEFECT_CATALOG.length, 9);
+  assert.equal(runAllAcceptanceVectors().passed, 32);
+  assert.equal(PLANTED_DEFECT_CATALOG.length, 11);
   for (const defect of PLANTED_DEFECT_CATALOG) {
     assert.equal(defect.run().gateTriggered, true);
   }
@@ -685,9 +698,87 @@ test('GitHub Pages publishing pipeline: pages.yml, site/app.json, input-kappa ca
 
     const gate = await verifyAssembledPagesSite(scratchDir);
     assert.equal(gate.valid, true);
-    assert.equal(gate.vectorsPassed, 26);
+    assert.equal(gate.vectorsPassed, 32);
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
+  }
+});
+
+test('AQ-19, AQ-20 & AQ-21: Production Qiskit BackendV2, Primitives V2, Upstream Oracle & prism-devrel Notebooks', () => {
+  // 1. Verify exact SHA-256 provenance of all 7 vendored Qiskit & prism-devrel files from disk
+  const rawPayloads: Record<string, Uint8Array> = {};
+  for (const entry of LOCKED_UPSTREAM_ORACLE_FILES) {
+    rawPayloads[entry.fileName] = new Uint8Array(
+      readFileSync(join('vendor/qiskit-oracle', entry.fileName)),
+    );
+  }
+
+  // Verify PRISM_DEVREL_BANNED_FILLER and PRISM_DEVREL_VAGUE_LINKS match vendored standard.json byte-for-byte
+  const vendoredStandard = JSON.parse(
+    readFileSync('vendor/qiskit-oracle/standard.json', 'utf8'),
+  ) as { fillers: string[]; vagueLinks: string[] };
+  assert.deepEqual(PRISM_DEVREL_BANNED_FILLER, vendoredStandard.fillers);
+  assert.deepEqual(PRISM_DEVREL_VAGUE_LINKS, vendoredStandard.vagueLinks);
+
+  // 2. Run all 16 authoritative Qiskit BackendV2, BasicSimulator, SamplerV2, and EstimatorV2 oracle cases
+  const oracleReport = runAuthoritativeQiskitOracleSuite(rawPayloads);
+  assert.equal(oracleReport.allProvenanceVerified, true);
+  assert.equal(oracleReport.totalCount, 16);
+  for (const c of oracleReport.cases) {
+    assert.equal(c.passed, true, `Oracle case ${c.id} (${c.upstreamTestName}) failed: ${c.detail}`);
+  }
+  assert.equal(oracleReport.allPassed, true);
+
+  // 3. Audit Diataxis Markdown guides & generate deterministic nbformat v4.5 Jupyter notebooks
+  const guideMap: Record<string, string> = {};
+  for (const g of DIATAXIS_GUIDE_META) {
+    guideMap[g.path] = readFileSync(g.path, 'utf8');
+  }
+  const devrelAudit = runDevRelContentAndPublishGateAudit(guideMap, rawPayloads);
+  assert.equal(devrelAudit.fillerViolations.length, 0);
+  assert.equal(devrelAudit.vagueLinkViolations.length, 0);
+  assert.equal(devrelAudit.uncoveredCapabilities.length, 0);
+  assert.equal(devrelAudit.coveredCapabilities.length, 21);
+  assert.equal(devrelAudit.unverifiedNotebooks, 0);
+  assert.equal(devrelAudit.gateVerdict, 'publish');
+  assert.equal(devrelAudit.gateOk, true);
+
+  // Verify devrel-publish-gate decision totality (publish vs regenerate vs refuse)
+  assert.equal(
+    evaluateDevRelPublishGatePrism({
+      uncoveredRecords: 0,
+      undeclaredCovers: 0,
+      unverifiedNotebooks: 0,
+      pinIsCurrent: false,
+    }).outcome,
+    'regenerate',
+  );
+  assert.equal(
+    evaluateDevRelPublishGatePrism({
+      uncoveredRecords: 1,
+      undeclaredCovers: 0,
+      unverifiedNotebooks: 0,
+      pinIsCurrent: true,
+    }).outcome,
+    'refuse',
+  );
+
+  // Emit /notebooks/*.ipynb and verify valid nbformat v4.5 JSON schema on disk
+  const nbResult = generateAllJupyterNotebooks('notebooks');
+  assert.equal(nbResult.writtenFiles.length, CANONICAL_NOTEBOOK_SPECS.length);
+  for (const nbPath of nbResult.writtenFiles) {
+    const parsed = JSON.parse(readFileSync(nbPath, 'utf8')) as {
+      nbformat: number;
+      nbformat_minor: number;
+      cells: Array<{ cell_type: string; outputs?: Array<{ output_type: string }> }>;
+    };
+    assert.equal(parsed.nbformat, 4);
+    assert.equal(parsed.nbformat_minor, 5);
+    const codeCells = parsed.cells.filter((c) => c.cell_type === 'code');
+    assert.ok(codeCells.length >= 2);
+    for (const cc of codeCells) {
+      assert.ok(cc.outputs && cc.outputs.some((o) => o.output_type === 'execute_result'));
+    }
   }
 });
 

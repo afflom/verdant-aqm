@@ -15,7 +15,8 @@ inductive{
     {name: quantumAlgorithmEngineer, fields: []},
     {name: qecTopologicalResearcher, fields: []},
     {name: formalVerificationAuditor, fields: []},
-    {name: browserRuntimeOperator, fields: []}
+    {name: browserRuntimeOperator, fields: []},
+    {name: qiskitSdkAndDevRelUser, fields: []}
   ]
 }
 
@@ -29,7 +30,8 @@ inductive{
     {name: coreWasmZeroImportIsolation, fields: []},
     {name: topologicalMtcCoherence, fields: []},
     {name: losslessProgressiveCustody, fields: []},
-    {name: dualBackendSpatialParity, fields: []}
+    {name: dualBackendSpatialParity, fields: []},
+    {name: qiskitOracleParityAndDevRelHonesty, fields: []}
   ]
 }
 
@@ -47,7 +49,9 @@ inductive{
     {name: tropicalSyndromeDecoder, fields: []},
     {name: uorcStitchCustodyStream, fields: []},
     {name: codedZeroDecodeMatmul, fields: []},
-    {name: spatialBenchViewport, fields: []}
+    {name: spatialBenchViewport, fields: []},
+    {name: qiskitBackendV2AndPrimitives, fields: []},
+    {name: jupyterNotebookAndDevRelDocs, fields: []}
   ]
 }
 
@@ -73,7 +77,8 @@ definition{
     | ArchitectureConcern.coreWasmZeroImportIsolation => ArchitectureViewKind.verificationBoundaryView
     | ArchitectureConcern.topologicalMtcCoherence => ArchitectureViewKind.executionSubstrateView
     | ArchitectureConcern.losslessProgressiveCustody => ArchitectureViewKind.custodyAndSpatialView
-    | ArchitectureConcern.dualBackendSpatialParity => ArchitectureViewKind.custodyAndSpatialView),
+    | ArchitectureConcern.dualBackendSpatialParity => ArchitectureViewKind.custodyAndSpatialView
+    | ArchitectureConcern.qiskitOracleParityAndDevRelHonesty => ArchitectureViewKind.verificationBoundaryView),
   axioms: []
 }
 
@@ -91,16 +96,20 @@ definition{
     | SystemComponent.tropicalSyndromeDecoder => ArchitectureViewKind.constructiveStrataView
     | SystemComponent.uorcStitchCustodyStream => ArchitectureViewKind.custodyAndSpatialView
     | SystemComponent.codedZeroDecodeMatmul => ArchitectureViewKind.constructiveStrataView
-    | SystemComponent.spatialBenchViewport => ArchitectureViewKind.custodyAndSpatialView),
+    | SystemComponent.spatialBenchViewport => ArchitectureViewKind.custodyAndSpatialView
+    | SystemComponent.qiskitBackendV2AndPrimitives => ArchitectureViewKind.executionSubstrateView
+    | SystemComponent.jupyterNotebookAndDevRelDocs => ArchitectureViewKind.verificationBoundaryView),
   axioms: []
 }
 
 theorem{
   name: architectureValid,
-  statement: (((concernAddressedByView ArchitectureConcern.coreWasmZeroImportIsolation)
+  statement: ((((concernAddressedByView ArchitectureConcern.coreWasmZeroImportIsolation)
       = ArchitectureViewKind.verificationBoundaryView)
     ∧ ((componentViewAssignment SystemComponent.holoCoreWasmGuest)
-      = ArchitectureViewKind.verificationBoundaryView)),
+      = ArchitectureViewKind.verificationBoundaryView))
+    ∧ ((componentViewAssignment SystemComponent.qiskitBackendV2AndPrimitives)
+      = ArchitectureViewKind.executionSubstrateView)),
   proof: decide{},
   axioms: []
 }

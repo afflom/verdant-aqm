@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "build:pages": "vite build && tsx bootstrap/assemble-pages.ts dist && tsx bootstrap/precache.ts dist",
+    "generate:notebooks": "tsx bootstrap/generate-notebooks.ts",
+    "build:pages": "tsx bootstrap/generate-notebooks.ts && vite build && tsx bootstrap/assemble-pages.ts dist && tsx bootstrap/precache.ts dist",
     "verify:pages": "tsx bootstrap/weight-gate.ts dist",
     "kappa:key": "tsx ci/kappa-cache.ts key",
     "test": "tsx --test src/aqm/aqm.test.ts",
+    "test:python": "python3 -m unittest discover -s python/qiskit-verdant-aqm/tests -v",
     "preview": "vite preview",
     "clean": "rm -rf dist .prism server.js",
     "lint": "tsc --noEmit"

@@ -37,8 +37,8 @@ id = "QM-05"
 characteristic = "Security"
 subcharacteristic = "Integrity & Containment"
 metric = "Core-Wasm guest host-import count and request BoundedBuffer ceiling"
-pinned_threshold = "0 imports, 64 UTF-8 bytes maximum request, 24/24 Wasm vectors passed"
-evidence = "AQ-01, AQ-15"
+pinned_threshold = "0 imports, 64 UTF-8 bytes maximum request, 32/32 Wasm vectors passed"
+evidence = "AQ-01, AQ-15, AQ-18"
 
 [[measures]]
 id = "QM-06"
@@ -47,3 +47,20 @@ subcharacteristic = "Co-existence"
 metric = "Software tile PBR framebuffer alignment quantum"
 pinned_threshold = "16x16 pixels"
 evidence = "AQ-10"
+
+[[measures]]
+id = "QM-07"
+characteristic = "Compatibility"
+subcharacteristic = "Interoperability"
+metric = "Authoritative Qiskit BackendV2, SamplerV2, and EstimatorV2 validation oracle residual"
+pinned_threshold = "< 1e-12 exact statevector/SparsePauliOp parity, 0 arbitrary qubit ceilings, 100% upstream SHA-256 lock match"
+evidence = "AQ-19, AQ-20, AQ-21, upstream.toml"
+
+[[measures]]
+id = "QM-08"
+characteristic = "Interaction capability"
+subcharacteristic = "Learnability"
+metric = "Prism-DevRel Diataxis guide coverage, prose filler count, and executed Jupyter notebook parity"
+pinned_threshold = "0 uncovered capabilities, 0 undeclared covers, 0 filler words (CS-10), 3/3 verified .ipynb notebooks"
+evidence = "AQ-21, Honesty::inv004DevRelRefusesUncoveredOrUnverified"
+

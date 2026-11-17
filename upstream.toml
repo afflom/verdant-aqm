@@ -1,0 +1,62 @@
+# External Upstream Authorities & Validation Oracles (`upstream.toml`)
+# Modeled directly on `afflom/prism-devrel/upstream.toml`.
+# Every imported validation oracle and DevRel standard is pinned by repository URL,
+# immutable 40-hex commit SHA, SPDX license, and byte-exact SHA-256 digest.
+
+[[authority]]
+id = "qiskit-backend-v2-oracle"
+repository = "https://github.com/Qiskit/qiskit"
+commit = "c68ee295b6fa403c67216eeb0f0fbbe12cc98b28"
+license = "Apache-2.0"
+what = "Authoritative Qiskit BackendV2, Target, BasicSimulator, BackendSamplerV2, and BackendEstimatorV2 conformance test suites."
+pinned = "vendor/qiskit-oracle/{test_backend_v2.py,test_basic_simulator.py,test_backend_sampler_v2.py,test_backend_estimator_v2.py}"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/test_backend_v2.py"
+upstream = "test/python/providers/test_backend_v2.py"
+bytes = 8471
+sha256 = "6fb02a2ab2d3f35dca6a5a871e8db7c020ce5d8aa37217d206d8cf75e4cbb913"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/test_basic_simulator.py"
+upstream = "test/python/providers/basic_provider/test_basic_simulator.py"
+bytes = 19638
+sha256 = "e904c06cd283c8c03b3b854aa47658eada9c1be9d5d204aa551f2109fa832d42"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/test_backend_sampler_v2.py"
+upstream = "test/python/primitives/test_backend_sampler_v2.py"
+bytes = 38666
+sha256 = "9fec4ea672de0294b1b66a902251b6fff8bd7a70ba26e94383533053bed6e7b1"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/test_backend_estimator_v2.py"
+upstream = "test/python/primitives/test_backend_estimator_v2.py"
+bytes = 23501
+sha256 = "c13e8e57dc75b1d6e00d0fd9b14b23ed7181973a2c2641da049b49fac7c7c2fa"
+
+[[authority]]
+id = "prism-devrel-content-and-publish-gate"
+repository = "https://github.com/afflom/prism-devrel"
+commit = "ace153e37c7c29646f3efa6e273c3c4f8c9fb8bc"
+license = "Apache-2.0"
+what = "Authoritative Prism-DevRel publish-gate decision table, CS-01..CS-11 content standard, Diataxis guide architecture, and 5 stakeholder personas (Kai, Iris, Vera, Wren, Otto)."
+pinned = "vendor/qiskit-oracle/{devrel-publish-gate.prompt.json,standard.json,content.json}"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/devrel-publish-gate.prompt.json"
+upstream = "examples/devrel-publish-gate.prompt.json"
+bytes = 7534
+sha256 = "f55e39cf10762a596c86d8a8eeffcdb1081fbea62c6ea0bb5a0a86dcf88b16f5"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/standard.json"
+upstream = "scripts/content/standard.json"
+bytes = 9806
+sha256 = "6a429d5dead25578613ba2797adaa580e39fdc6067920b8e017f49c547f48008"
+
+[[authority.files]]
+local = "vendor/qiskit-oracle/content.json"
+upstream = "model/content.json"
+bytes = 5917
+sha256 = "57f4d8c6d66121f657b60806ad1fbe9285dc0949aa891e86a0d309c865850d6e"

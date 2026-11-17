@@ -32,7 +32,7 @@ honesty_verdict = "admitRow"
 id = "LEDGER-05"
 tier = "build"
 statement = "Unbounded Sparse Z[zeta_8] ket engine, ExactMps Q(zeta_8) tensor-train engine, O(n/32) column-transposed bit-plane F_2 tableau, Prism monoid gate-fusion canonicalizer, parametric [[d^2, 1, d]] surface code (d=3..11), Atlas C(Z_3 x Z_2^3, q) verifier, Continued-Fraction + Solovay-Kitaev SkWeaver, and 6-export zero-import wasm32 VerdantAqm.holo v4 compute guest."
-anchor = "AQ-01..AQ-18 + 9 planted-defect refusal gates + 26 Wasm acceptance vectors"
+anchor = "AQ-01..AQ-21 + 11 planted-defect refusal gates + 32 Wasm acceptance vectors"
 honesty_verdict = "admitRow"
 
 [[rows]]
@@ -41,4 +41,12 @@ tier = "open"
 statement = "Measured wall-clock runtime, gate-fusion compression ratio, active ket/MPS rank compression, and BLAKE3 kappa-addressed prefix-state memoization across 64..16,384-qubit structured circuits in browser memory."
 anchor = "Empirical live benchmark in AtlasMegascalePanel (never claimed as unconditional BQP subset P collapse)"
 honesty_verdict = "admitRow"
+
+[[rows]]
+id = "LEDGER-07"
+tier = "build"
+statement = "Commercial Qiskit BackendV2 (qiskit-verdant-aqm Python distribution + in-browser TypeScript/Wasm runtime), SamplerV2, EstimatorV2, SHA-256-locked Qiskit/qiskit validation oracle, Diataxis documentation, and nbformat v4.5 Jupyter notebooks."
+anchor = "AQ-19..AQ-21 + upstream.toml + python/qiskit-verdant-aqm/tests/test_qiskit_oracle.py + notebooks/*.ipynb"
+honesty_verdict = "admitRow"
+
 

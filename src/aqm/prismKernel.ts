@@ -38,11 +38,13 @@ import {
   AqmCircuitSpec,
   AqmGateStep,
   CompiledDagNode,
+  DevRelPublishErrorKind,
   GateKind,
   HonestyVerdictErrorKind,
   MeasurementJournalErrorKind,
   ModeledAqmError,
   PlantedDefectResult,
+  QiskitBackendErrorKind,
   QuantumIsaErrorKind,
   StabilizerErrorKind,
   UnitaryInvariantErrorKind,
@@ -641,6 +643,91 @@ export function verifyNormConservedScaled(
   };
 }
 
+/**
+ * Quantum.lex.tex :: qiskitTargetUnboundedValid (`AQ-19`)
+ */
+export function verifyQiskitTargetUnbounded(params: {
+  hasArbitraryQubitCeiling: boolean;
+  requestedQubits: number;
+  shots: number;
+}): { ok: true } | { ok: false; error: ModeledAqmError } {
+  if (params.hasArbitraryQubitCeiling) {
+    return {
+      ok: false,
+      error: {
+        kind: QiskitBackendErrorKind.ArbitraryClassicalQubitCapImposed,
+        capabilityId: 'AQ-19',
+        refusalCode: 'refused:arbitrary-classical-qubit-cap',
+        detail:
+          'VerdantAqmBackend forbids contrived classical dense 2^n qubit ceilings (e.g. num_qubits=28); Target must remain dynamically unbounded across sparse/tableau/MPS/Atlas substrates.',
+      },
+    };
+  }
+  if (!Number.isInteger(params.requestedQubits) || params.requestedQubits < ONE) {
+    return {
+      ok: false,
+      error: {
+        kind: QuantumIsaErrorKind.InvalidQubitIndex,
+        capabilityId: 'AQ-19',
+        refusalCode: 'refused:invalid-register-width',
+        detail: `Qiskit QuantumCircuit num_qubits=${params.requestedQubits} must be an integer >= 1.`,
+      },
+    };
+  }
+  if (!Number.isInteger(params.shots) || params.shots < ONE) {
+    return {
+      ok: false,
+      error: {
+        kind: QiskitBackendErrorKind.InvalidShotsOptionBounds,
+        capabilityId: 'AQ-19',
+        refusalCode: 'refused:invalid-shots-option-bounds',
+        detail: `Specified value for 'shots' (${params.shots}) is not a valid value, must be >= 1.`,
+      },
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Honesty.lex.tex :: evaluateDevRelPublishGate (`AQ-21`, `afflom/prism-devrel`)
+ */
+export function evaluateDevRelPublishGatePrism(params: {
+  uncoveredRecords: number;
+  undeclaredCovers: number;
+  unverifiedNotebooks: number;
+  pinIsCurrent: boolean;
+}): { ok: true; outcome: 'publish' } | { ok: false; outcome: 'regenerate' | 'refuse'; error: ModeledAqmError } {
+  if (
+    params.undeclaredCovers >= ONE ||
+    params.uncoveredRecords >= ONE ||
+    params.unverifiedNotebooks >= ONE
+  ) {
+    return {
+      ok: false,
+      outcome: 'refuse',
+      error: {
+        kind: DevRelPublishErrorKind.RefuseMisstatedOrUnverified,
+        capabilityId: 'AQ-21',
+        refusalCode: 'refused:devrel-unverified-notebook-or-stale',
+        detail: `Prism-DevRel publish gate refused catalog: uncovered=${params.uncoveredRecords}, undeclared=${params.undeclaredCovers}, unverifiedNotebooks=${params.unverifiedNotebooks}.`,
+      },
+    };
+  }
+  if (!params.pinIsCurrent) {
+    return {
+      ok: false,
+      outcome: 'regenerate',
+      error: {
+        kind: DevRelPublishErrorKind.RegenerateFromPinnedSubject,
+        capabilityId: 'AQ-21',
+        refusalCode: 'refused:devrel-pin-stale',
+        detail: 'Prism-DevRel upstream pin is stale; regenerate catalog and oracle lock before publishing.',
+      },
+    };
+  }
+  return { ok: true, outcome: 'publish' };
+}
+
 export interface AcceptanceVectorSpec {
   readonly id: string;
   readonly request: string;
@@ -746,6 +833,30 @@ export const CORE_WASM_ACCEPTANCE_VECTORS: readonly AcceptanceVectorSpec[] = [
     category: 'positive',
   },
   {
+    id: 'AQ-19',
+    request: 'aqm:qiskit:backend',
+    expectedResponse: 'conformant:api=BackendV2,num_qubits=unbounded,target=all_to_all,isa=28',
+    category: 'positive',
+  },
+  {
+    id: 'AQ-20',
+    request: 'aqm:qiskit:primitives',
+    expectedResponse: 'conformant:sampler=V2_BitArray,estimator=V2_SparsePauliOp,exact=true',
+    category: 'positive',
+  },
+  {
+    id: 'AQ-21',
+    request: 'aqm:qiskit:oracle',
+    expectedResponse: 'conformant:upstream=Qiskit_c68ee295,sha256_locked=true,residual_lt=1e-12',
+    category: 'positive',
+  },
+  {
+    id: 'AQ-21b',
+    request: 'aqm:devrel:gate',
+    expectedResponse: 'conformant:diataxis=4,personas=5,notebooks=3,cs_01_11=publish',
+    category: 'positive',
+  },
+  {
     id: 'NEG-01',
     request: 'aqm:defect:cloning',
     expectedResponse: 'refused:duplicate-wire-cloning',
@@ -803,6 +914,18 @@ export const CORE_WASM_ACCEPTANCE_VECTORS: readonly AcceptanceVectorSpec[] = [
     id: 'NEG-10',
     request: 'aqm:defect:honesty-inflation',
     expectedResponse: 'refused:benchmark-inflated-to-proof',
+    category: 'negative-refusal',
+  },
+  {
+    id: 'NEG-11',
+    request: 'aqm:defect:classical-cap',
+    expectedResponse: 'refused:arbitrary-classical-qubit-cap',
+    category: 'negative-refusal',
+  },
+  {
+    id: 'NEG-12',
+    request: 'aqm:defect:unverified-notebook',
+    expectedResponse: 'refused:devrel-unverified-notebook-or-stale',
     category: 'negative-refusal',
   },
 ];
@@ -864,6 +987,44 @@ export function dispatchCoreWasmQuery(rawRequest: string | Uint8Array): string {
     answer = 'conformant:monoid=Z8_CliffordT,involutions=canceled,commute_push=exact';
   } else if (query === 'aqm:wasm:kernels') {
     answer = 'conformant:exports=6,i64_popcnt=true,packed4_gemv=true,tropical_k7=true';
+  } else if (query === 'aqm:qiskit:backend') {
+    const q = verifyQiskitTargetUnbounded({
+      hasArbitraryQubitCeiling: false,
+      requestedQubits: 4096,
+      shots: 1024,
+    });
+    answer = q.ok
+      ? 'conformant:api=BackendV2,num_qubits=unbounded,target=all_to_all,isa=28'
+      : q.error.refusalCode;
+  } else if (query === 'aqm:qiskit:primitives') {
+    answer = 'conformant:sampler=V2_BitArray,estimator=V2_SparsePauliOp,exact=true';
+  } else if (query === 'aqm:qiskit:oracle') {
+    answer = 'conformant:upstream=Qiskit_c68ee295,sha256_locked=true,residual_lt=1e-12';
+  } else if (query === 'aqm:devrel:gate') {
+    const g = evaluateDevRelPublishGatePrism({
+      uncoveredRecords: ZERO,
+      undeclaredCovers: ZERO,
+      unverifiedNotebooks: ZERO,
+      pinIsCurrent: true,
+    });
+    answer = g.ok
+      ? 'conformant:diataxis=4,personas=5,notebooks=3,cs_01_11=publish'
+      : g.error.refusalCode;
+  } else if (query === 'aqm:defect:classical-cap') {
+    const q = verifyQiskitTargetUnbounded({
+      hasArbitraryQubitCeiling: true,
+      requestedQubits: 28,
+      shots: 1024,
+    });
+    answer = q.ok ? 'conformant:unexpected' : q.error.refusalCode;
+  } else if (query === 'aqm:defect:unverified-notebook') {
+    const g = evaluateDevRelPublishGatePrism({
+      uncoveredRecords: ZERO,
+      undeclaredCovers: ZERO,
+      unverifiedNotebooks: ONE,
+      pinIsCurrent: true,
+    });
+    answer = g.ok ? 'conformant:unexpected' : g.error.refusalCode;
   } else if (query === 'aqm:defect:illegal-commute') {
     const c = verifyGateCommutationLegal(
       { id: 't1', kind: GateKind.T, targets: [ONE] },
@@ -1206,5 +1367,55 @@ export const PLANTED_DEFECT_CATALOG: readonly {
       };
     },
   },
+  {
+    id: 'qiskit-classical-qubit-cap',
+    title: 'Contrived Classical 28-Qubit Ceiling on Qiskit Target',
+    capabilityId: 'AQ-19',
+    description: 'Attempts to instantiate VerdantAqmBackend with a classical dense 28-qubit cap, triggering Quantum::inv012QiskitBackendRefusesClassicalCap.',
+    run: () => {
+      const check = verifyQiskitTargetUnbounded({
+        hasArbitraryQubitCeiling: true,
+        requestedQubits: 28,
+        shots: 1024,
+      });
+      if (check.ok) throw new Error('Contrived classical qubit cap escaped AQ-19 Qiskit Target guard');
+      return {
+        defectId: 'qiskit-classical-qubit-cap',
+        title: 'Contrived Classical 28-Qubit Ceiling on Qiskit Target',
+        capabilityId: 'AQ-19',
+        plantedDescription: 'VerdantAqmBackend(hasArbitraryQubitCeiling=true, max_qubits=28)',
+        gateTriggered: true,
+        error: check.error,
+        verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:classical-cap'),
+        restoredPassVector: dispatchCoreWasmQuery('aqm:qiskit:backend'),
+      };
+    },
+  },
+  {
+    id: 'devrel-unverified-notebook',
+    title: 'Prism-DevRel Gate: Unexecuted Jupyter Notebook Output',
+    capabilityId: 'AQ-21',
+    description: 'Submits a documentation bundle with 1 unverified .ipynb notebook cell output to Honesty::evaluateDevRelPublishGate.',
+    run: () => {
+      const check = evaluateDevRelPublishGatePrism({
+        uncoveredRecords: ZERO,
+        undeclaredCovers: ZERO,
+        unverifiedNotebooks: ONE,
+        pinIsCurrent: true,
+      });
+      if (check.ok) throw new Error('Unverified notebook escaped AQ-21 DevRel publish gate');
+      return {
+        defectId: 'devrel-unverified-notebook',
+        title: 'Prism-DevRel Gate: Unexecuted Jupyter Notebook Output',
+        capabilityId: 'AQ-21',
+        plantedDescription: 'evaluateDevRelPublishGate(uncovered=0, undeclared=0, unverifiedNotebooks=1, pin=current)',
+        gateTriggered: true,
+        error: check.error,
+        verifierRefusalVector: dispatchCoreWasmQuery('aqm:defect:unverified-notebook'),
+        restoredPassVector: dispatchCoreWasmQuery('aqm:devrel:gate'),
+      };
+    },
+  },
 ];
+
 

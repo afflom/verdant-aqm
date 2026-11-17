@@ -21,12 +21,13 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 import { verifyHoloArchiveComplete } from '../ci/kappa-cache';
+import { CORE_WASM_ACCEPTANCE_VECTORS } from '../src/aqm/prismKernel';
 import { PrecacheManifest } from './precache';
 
 export const PAGES_WIRE_BUDGET = {
-  holoGzipMaxBytes: 16 * 1024, // VerdantAqm.holo v4 guest (< 4.5 KiB raw, < 2.5 KiB gzip)
+  holoGzipMaxBytes: 16 * 1024, // VerdantAqm.holo v4 guest (< 5 KiB raw, < 3 KiB gzip)
   shellHtmlGzipMaxBytes: 16 * 1024,
-  totalGzipMaxBytes: 450 * 1024, // Full React + Three.js + 4-substrate AQM + Wasm studio gzipped
+  totalGzipMaxBytes: 600 * 1024, // Full React + Three.js + Unbounded Qiskit BackendV2 + Notebooks + Docs + Wasm studio gzipped
 } as const;
 
 export interface PagesWeightGateReport {
@@ -50,6 +51,11 @@ const REQUIRED_ARTIFACTS = [
   'app.json',
   'app.holo',
   'VerdantAqm.holo',
+  'qiskit-verdant-aqm-manifest.json',
+  'notebooks/01_quickstart_verdant_qiskit_backend.ipynb',
+  'notebooks/02_megascale_4096q_cat_stabilizer_and_toffoli.ipynb',
+  'notebooks/03_primitives_v2_vqe_pauli_estimator_and_oracle.ipynb',
+  'docs/index.md',
   'precache.json',
   'llms.txt',
 ] as const;
@@ -150,8 +156,9 @@ export async function verifyAssembledPagesSite(
     throw new Error(`Pages weight/integrity gate refused deployment:\n  - ${failures.join('\n  - ')}`);
   }
 
+  const expectedVecs = CORE_WASM_ACCEPTANCE_VECTORS.length;
   console.log(
-    `weight-gate: PASS · precache v=${precache.version} (${precache.files.length} files) · app.holo=${holoReport.byteLength}B (${holoGzipBytes}B gz, 26/26 Wasm vectors) · total=${(totalRawBytes / 1024).toFixed(1)} KiB raw / ${(totalGzipBytes / 1024).toFixed(1)} KiB gzip`,
+    `weight-gate: PASS · precache v=${precache.version} (${precache.files.length} files) · app.holo=${holoReport.byteLength}B (${holoGzipBytes}B gz, ${expectedVecs}/${expectedVecs} Wasm vectors) · total=${(totalRawBytes / 1024).toFixed(1)} KiB raw / ${(totalGzipBytes / 1024).toFixed(1)} KiB gzip`,
   );
 
   return {
@@ -162,7 +169,7 @@ export async function verifyAssembledPagesSite(
     holoGzipBytes,
     totalRawBytes,
     totalGzipBytes,
-    vectorsPassed: 26,
+    vectorsPassed: expectedVecs,
   };
 }
 

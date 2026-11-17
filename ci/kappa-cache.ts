@@ -7,7 +7,7 @@
  *    (`app`, `model`, `crates`, `src/aqm`).
  *  - Never trusts a cached `.holo`: every restored or freshly built `VerdantAqm.holo` must pass
  *    32-byte BLAKE3 self-fingerprint verification, 356-byte `APP_MANIFEST` inspection,
- *    zero-import `wasm32` compilation, 6-export ABI check, and 26/26 `holo_run` vector replay!
+ *    zero-import `wasm32` compilation, 6-export ABI check, and 32/32 `holo_run` vector replay!
  *  - Supports OCI container registry caching on `ghcr.io/<owner>/prism-holo` in GitHub Actions,
  *    while gracefully falling through to fresh deterministic build on cache miss or offline runs.
  *
@@ -180,7 +180,7 @@ export interface HoloIdentityRecord {
 }
 
 /**
- * Deterministically builds `VerdantAqm.holo`, verifies all 26 vectors, and writes
+ * Deterministically builds `VerdantAqm.holo`, verifies all 32 vectors, and writes
  * `<dirname(outPath)>/application/holo-identities.json` matching `verdant-engine/pages.yml`.
  */
 export async function buildAndWriteVerifiedHolo(
@@ -189,7 +189,7 @@ export async function buildAndWriteVerifiedHolo(
   cwd = process.cwd(),
 ): Promise<HoloIdentityRecord> {
   const { kappa: inputKappa } = computeInputKappa(inputs, cwd);
-  const built = buildVerdantAqmHoloArchive(`VerdantAqm@0.2.0:8-facets:AQ-01..AQ-18:${inputKappa}`);
+  const built = buildVerdantAqmHoloArchive(`VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21:${inputKappa}`);
   const verified = await verifyHoloArchiveComplete(built.archiveBytes);
 
   const absOut = resolve(cwd, outPath);
@@ -311,7 +311,7 @@ async function restoreFromGhcr(
     );
 
     say(
-      `restored & verified ${tag} (${verified.byteLength} B, ${CORE_WASM_ACCEPTANCE_VECTORS.length}/26 vectors)`,
+      `restored & verified ${tag} (${verified.byteLength} B, ${CORE_WASM_ACCEPTANCE_VECTORS.length}/${CORE_WASM_ACCEPTANCE_VECTORS.length} vectors)`,
     );
     return true;
   } catch (err) {
@@ -421,7 +421,7 @@ async function main(): Promise<void> {
     const inputs = rest.length > 1 ? rest.slice(1) : DEFAULT_INPUTS;
     const rec = await buildAndWriteVerifiedHolo(outPath, inputs);
     say(
-      `built & verified ${outPath} (${rec.archive_bytes} B, fingerprint ${rec.archive_fingerprint.slice(0, 16)}…, ${rec.vectors_verified}/26 vectors)`,
+      `built & verified ${outPath} (${rec.archive_bytes} B, fingerprint ${rec.archive_fingerprint.slice(0, 16)}…, ${rec.vectors_verified}/${CORE_WASM_ACCEPTANCE_VECTORS.length} vectors)`,
     );
     return;
   }
