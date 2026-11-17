@@ -9,7 +9,7 @@
 
 pub mod uorc;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Constructive zero (`0`).
 pub const ZERO: usize = 0;
@@ -182,19 +182,86 @@ pub enum GateOp {
     Swap(usize, usize),
 }
 
-/// Unbounded sparse cyclotomic state (`Runs<Grid<16>, 16>`) indexed by arbitrary `u128` basis kets.
+/// Canonical sparse computational basis ket `|k⟩` represented by the sorted set of wires in state `|1⟩`.
+/// Scales to arbitrary `usize` register widths (`1,000,000+` qubits) with zero bit-width ceiling.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SparseKet {
+    pub ones: BTreeSet<usize>,
+}
+
+impl SparseKet {
+    #[must_use]
+    pub fn zero() -> Self {
+        Self {
+            ones: BTreeSet::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_u128(bits: u128) -> Self {
+        let mut ones = BTreeSet::new();
+        let mut rem = bits;
+        let mut idx = ZERO;
+        while rem != 0_u128 {
+            if (rem & 1_u128) != 0_u128 {
+                ones.insert(idx);
+            }
+            rem >>= ONE;
+            idx += ONE;
+        }
+        Self { ones }
+    }
+
+    #[must_use]
+    pub fn bit(&self, wire: usize) -> bool {
+        self.ones.contains(&wire)
+    }
+
+    #[must_use]
+    pub fn with_zero(&self, wire: usize) -> Self {
+        let mut next = self.ones.clone();
+        next.remove(&wire);
+        Self { ones: next }
+    }
+
+    #[must_use]
+    pub fn with_one(&self, wire: usize) -> Self {
+        let mut next = self.ones.clone();
+        next.insert(wire);
+        Self { ones: next }
+    }
+
+    #[must_use]
+    pub fn flipped(&self, wire: usize) -> Self {
+        let mut next = self.ones.clone();
+        if !next.remove(&wire) {
+            next.insert(wire);
+        }
+        Self { ones: next }
+    }
+
+    #[must_use]
+    pub fn swapped(&self, a: usize, b: usize) -> Self {
+        if self.bit(a) == self.bit(b) {
+            return self.clone();
+        }
+        self.flipped(a).flipped(b)
+    }
+}
+
+/// Unbounded sparse cyclotomic state (`Runs<Grid<16>, 16>`) indexed by arbitrary-width `SparseKet` basis kets.
 #[derive(Clone, Debug)]
 pub struct SparseCyclotomicRegister {
     pub qubit_count: usize,
     pub norm_denom: i128,
-    pub support: BTreeMap<u128, CyclotomicScalar>,
+    pub support: BTreeMap<SparseKet, CyclotomicScalar>,
 }
 
 impl SparseCyclotomicRegister {
     #[must_use]
     pub fn computational_zero(qubit_count: usize) -> Self {
         let mut support = BTreeMap::new();
-        support.insert(0_u128, CyclotomicScalar::one());
+        support.insert(SparseKet::zero(), CyclotomicScalar::one());
         Self {
             qubit_count,
             norm_denom: 1_i128,
@@ -202,16 +269,16 @@ impl SparseCyclotomicRegister {
         }
     }
 
-    /// Applies a unitary Clifford+T gate in `O(|support|)` independent of `2^n`.
+    /// Applies a unitary Clifford+T gate in `O(|support|)` independent of `2^n` and with no qubit ceiling.
     pub fn apply_gate(&mut self, gate: GateOp) -> Result<(), QuantumIsaError> {
         match gate {
             GateOp::H(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
                 let mut next = BTreeMap::new();
-                for (&ket, _) in &self.support {
-                    let k0 = ket & !mask;
-                    if next.contains_key(&k0) || next.contains_key(&(k0 | mask)) {
+                for ket in self.support.keys() {
+                    let k0 = ket.with_zero(q);
+                    let k1 = k0.with_one(q);
+                    if next.contains_key(&k0) || next.contains_key(&k1) {
                         continue;
                     }
                     let u0 = self
@@ -221,7 +288,7 @@ impl SparseCyclotomicRegister {
                         .unwrap_or(CyclotomicScalar::zero());
                     let u1 = self
                         .support
-                        .get(&(k0 | mask))
+                        .get(&k1)
                         .copied()
                         .unwrap_or(CyclotomicScalar::zero());
                     let v0 = u0.add(u1);
@@ -230,7 +297,7 @@ impl SparseCyclotomicRegister {
                         next.insert(k0, v0);
                     }
                     if !v1.is_zero() {
-                        next.insert(k0 | mask, v1);
+                        next.insert(k1, v1);
                     }
                 }
                 self.support = next;
@@ -238,63 +305,56 @@ impl SparseCyclotomicRegister {
             }
             GateOp::T(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
-                for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0_u128 {
+                for (ket, amp) in &mut self.support {
+                    if ket.bit(q) {
                         *amp = amp.mul_zeta8();
                     }
                 }
             }
             GateOp::S(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
-                for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0_u128 {
+                for (ket, amp) in &mut self.support {
+                    if ket.bit(q) {
                         *amp = amp.mul_i();
                     }
                 }
             }
             GateOp::Z(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
-                for (&ket, amp) in &mut self.support {
-                    if (ket & mask) != 0_u128 {
+                for (ket, amp) in &mut self.support {
+                    if ket.bit(q) {
                         *amp = amp.neg();
                     }
                 }
             }
             GateOp::X(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
                 let mut next = BTreeMap::new();
-                for (&ket, &amp) in &self.support {
-                    next.insert(ket ^ mask, amp);
+                for (ket, &amp) in &self.support {
+                    next.insert(ket.flipped(q), amp);
                 }
                 self.support = next;
             }
             GateOp::Y(q) => {
                 self.check_wire(q)?;
-                let mask = 1_u128 << q;
                 let mut next = BTreeMap::new();
-                for (&ket, &amp) in &self.support {
-                    if (ket & mask) == 0_u128 {
-                        next.insert(ket | mask, amp.mul_i());
+                for (ket, &amp) in &self.support {
+                    if !ket.bit(q) {
+                        next.insert(ket.with_one(q), amp.mul_i());
                     } else {
-                        next.insert(ket & !mask, amp.mul_i().neg());
+                        next.insert(ket.with_zero(q), amp.mul_i().neg());
                     }
                 }
                 self.support = next;
             }
             GateOp::Cnot(ctrl, targ) => {
                 self.check_pair(ctrl, targ)?;
-                let c_mask = 1_u128 << ctrl;
-                let t_mask = 1_u128 << targ;
                 let mut next = BTreeMap::new();
-                for (&ket, &amp) in &self.support {
-                    let dst = if (ket & c_mask) != 0_u128 {
-                        ket ^ t_mask
+                for (ket, &amp) in &self.support {
+                    let dst = if ket.bit(ctrl) {
+                        ket.flipped(targ)
                     } else {
-                        ket
+                        ket.clone()
                     };
                     next.insert(dst, amp);
                 }
@@ -302,23 +362,17 @@ impl SparseCyclotomicRegister {
             }
             GateOp::Cz(a, b) => {
                 self.check_pair(a, b)?;
-                let ab_mask = (1_u128 << a) | (1_u128 << b);
-                for (&ket, amp) in &mut self.support {
-                    if (ket & ab_mask) == ab_mask {
+                for (ket, amp) in &mut self.support {
+                    if ket.bit(a) && ket.bit(b) {
                         *amp = amp.neg();
                     }
                 }
             }
             GateOp::Swap(a, b) => {
                 self.check_pair(a, b)?;
-                let ma = 1_u128 << a;
-                let mb = 1_u128 << b;
                 let mut next = BTreeMap::new();
-                for (&ket, &amp) in &self.support {
-                    let ba = (ket & ma) != 0_u128;
-                    let bb = (ket & mb) != 0_u128;
-                    let dst = if ba == bb { ket } else { ket ^ (ma | mb) };
-                    next.insert(dst, amp);
+                for (ket, &amp) in &self.support {
+                    next.insert(ket.swapped(a, b), amp);
                 }
                 self.support = next;
             }
@@ -480,6 +534,187 @@ impl ColumnBitPlaneTableau {
             }
         }
         Ok(())
+    }
+
+    /// Zero-transpose bit-sliced projective Z collapse directly on 64-row column bit-planes
+    /// (`Quantum.lex.tex::inv016BitSlicedStabilizerCollapseMod4`).
+    pub fn measure_z_bitplane(&mut self, wire: usize, rand_bit: bool) -> Result<bool, QuantumIsaError> {
+        if wire >= self.n {
+            return Err(QuantumIsaError::InvalidQubitIndex {
+                wire,
+                qubit_count: self.n,
+            });
+        }
+        let n = self.n;
+        let rows = QUBIT_ARITY * n;
+        let p = self.planes_per_col;
+        let wire_base = wire * p;
+
+        let mut pivot_opt: Option<usize> = None;
+        for row in n..rows {
+            if (self.col_x[wire_base + (row / WORD_BITS)] & (1_u64 << (row % WORD_BITS))) != 0_u64 {
+                pivot_opt = Some(row);
+                break;
+            }
+        }
+
+        if let Some(p_row) = pivot_opt {
+            let dst_row = p_row - n;
+            let src_w = p_row / WORD_BITS;
+            let src_m = 1_u64 << (p_row % WORD_BITS);
+            let dst_w = dst_row / WORD_BITS;
+            let dst_m = 1_u64 << (dst_row % WORD_BITS);
+
+            let mut elim = self.col_x[wire_base..wire_base + p].to_vec();
+            elim[src_w] &= !src_m;
+            elim[dst_w] &= !dst_m;
+
+            let r_pivot = (self.r_planes[src_w] & src_m) != 0_u64;
+            let r_bcast = if r_pivot { !0_u64 } else { 0_u64 };
+            let mut acc_lo = vec![0_u64; p];
+            let mut acc_hi = vec![0_u64; p];
+            for w in ZERO..p {
+                acc_hi[w] = (self.r_planes[w] ^ r_bcast) & elim[w];
+            }
+
+            for q in ZERO..n {
+                let qb = q * p;
+                let x1 = (self.col_x[qb + src_w] & src_m) != 0_u64;
+                let z1 = (self.col_z[qb + src_w] & src_m) != 0_u64;
+                if !x1 && !z1 {
+                    continue;
+                }
+                for w in ZERO..p {
+                    let em = elim[w];
+                    if em == 0_u64 {
+                        continue;
+                    }
+                    let x2 = self.col_x[qb + w] & em;
+                    let z2 = self.col_z[qb + w] & em;
+                    let nx2 = em ^ x2;
+                    let nz2 = em ^ z2;
+                    let (pos, neg) = match (x1, z1) {
+                        (true, true) => (z2 & nx2, x2 & nz2),
+                        (true, false) => (x2 & z2, z2 & nx2),
+                        (false, true) => (x2 & nz2, x2 & z2),
+                        (false, false) => (0_u64, 0_u64),
+                    };
+                    let carry = acc_lo[w] & pos;
+                    acc_lo[w] ^= pos;
+                    acc_hi[w] ^= carry;
+
+                    let borrow = (!acc_lo[w]) & neg;
+                    acc_lo[w] ^= neg;
+                    acc_hi[w] ^= borrow;
+
+                    if x1 {
+                        self.col_x[qb + w] ^= em;
+                    }
+                    if z1 {
+                        self.col_z[qb + w] ^= em;
+                    }
+                }
+            }
+
+            for w in ZERO..p {
+                let em = elim[w];
+                self.r_planes[w] = (self.r_planes[w] & !em) | ((acc_hi[w] & !acc_lo[w]) & em);
+            }
+
+            for q in ZERO..n {
+                let qb = q * p;
+                let sx = (self.col_x[qb + src_w] & src_m) != 0_u64;
+                let sz = (self.col_z[qb + src_w] & src_m) != 0_u64;
+                if sx {
+                    self.col_x[qb + dst_w] |= dst_m;
+                } else {
+                    self.col_x[qb + dst_w] &= !dst_m;
+                }
+                if sz {
+                    self.col_z[qb + dst_w] |= dst_m;
+                } else {
+                    self.col_z[qb + dst_w] &= !dst_m;
+                }
+                self.col_x[qb + src_w] &= !src_m;
+                self.col_z[qb + src_w] &= !src_m;
+            }
+            self.col_z[wire_base + src_w] |= src_m;
+
+            if r_pivot {
+                self.r_planes[dst_w] |= dst_m;
+            } else {
+                self.r_planes[dst_w] &= !dst_m;
+            }
+            if rand_bit {
+                self.r_planes[src_w] |= src_m;
+            } else {
+                self.r_planes[src_w] &= !src_m;
+            }
+            return Ok(rand_bit);
+        }
+
+        let mut prod = vec![0_u64; p];
+        let mut prod_count = ZERO;
+        for d in ZERO..n {
+            if (self.col_x[wire_base + (d / WORD_BITS)] & (1_u64 << (d % WORD_BITS))) != 0_u64 {
+                let s_row = d + n;
+                prod[s_row / WORD_BITS] |= 1_u64 << (s_row % WORD_BITS);
+                prod_count += ONE;
+            }
+        }
+        if prod_count == ZERO {
+            return Ok(false);
+        }
+
+        let mut r_parity = 0_u32;
+        for w in ZERO..p {
+            r_parity ^= (self.r_planes[w] & prod[w]).count_ones() & 1_u32;
+        }
+        if prod_count == ONE {
+            return Ok(r_parity != 0_u32);
+        }
+
+        let mut acc_mod4 = if r_parity != 0_u32 { QUBIT_ARITY } else { ZERO };
+        for q in ZERO..n {
+            let qb = q * p;
+            let mut active = ZERO;
+            for w in ZERO..p {
+                active += ((self.col_x[qb + w] | self.col_z[qb + w]) & prod[w]).count_ones() as usize;
+                if active >= QUBIT_ARITY {
+                    break;
+                }
+            }
+            if active < QUBIT_ARITY {
+                continue;
+            }
+            let mut sx = false;
+            let mut sz = false;
+            for w in ZERO..p {
+                let xw = self.col_x[qb + w] & prod[w];
+                let zw = self.col_z[qb + w] & prod[w];
+                let mut mw = xw | zw;
+                while mw != 0_u64 {
+                    let lb = mw & mw.wrapping_neg();
+                    let x1 = (xw & lb) != 0_u64;
+                    let z1 = (zw & lb) != 0_u64;
+                    let pos = (x1 && z1 && !sx && sz)
+                        || (x1 && !z1 && sx && sz)
+                        || (!x1 && z1 && sx && !sz);
+                    let neg = (x1 && z1 && sx && !sz)
+                        || (!x1 && z1 && sx && sz)
+                        || (x1 && !z1 && !sx && sz);
+                    if pos {
+                        acc_mod4 = (acc_mod4 + ONE) % CYCLOTOMIC_RANK;
+                    } else if neg {
+                        acc_mod4 = (acc_mod4 + THREE) % CYCLOTOMIC_RANK;
+                    }
+                    sx ^= x1;
+                    sz ^= z1;
+                    mw ^= lb;
+                }
+            }
+        }
+        Ok(acc_mod4 == QUBIT_ARITY)
     }
 }
 

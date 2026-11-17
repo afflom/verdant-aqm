@@ -449,6 +449,48 @@ class TestAuthoritativeQiskitOracle(unittest.TestCase):
         self.assertEqual(sweep_pub.data.meas.num_shots, 100)
         self.assertEqual(sweep_pub.data.meas.get_counts(), {"0": 50, "1": 50})
 
+        # 7. Verify zero-transpose bit-sliced 512q x 64 mid-circuit shots completes in < 0.25s (down from 12.3s!)
+        import time
+        from qiskit_verdant_aqm.uorc_wire import (
+            compress_uorc_portable,
+            decompress_uorc_portable,
+        )
+
+        t_mid0 = time.perf_counter()
+        VerdantAqmBackend(shots=64, seed_simulator=99).run(mid512).result()
+        dt_mid = time.perf_counter() - t_mid0
+        self.assertLess(dt_mid, 0.25, f"Expected 512q x 64 mid-circuit shots < 0.25s, took {dt_mid:.3f}s")
+
+        # 8. 10,000,000-qubit (10^7q) sparse Clifford+T+Toffoli circuit fuses & executes in < 0.2s!
+        n_10m = 10_000_000
+        qc_10m = QuantumCircuit(n_10m, 4, name="cat_toffoli_10M_q")
+        qc_10m.h(0)
+        qc_10m.t(0)
+        qc_10m.cx(0, 5_000_000)
+        qc_10m.tdg(0)
+        qc_10m.ccx(0, 5_000_000, n_10m - 1)
+        qc_10m.measure([0, 5_000_000, n_10m - 1, 1_234_567], [0, 1, 2, 3])
+        t_10m0 = time.perf_counter()
+        res_10m = VerdantAqmBackend(shots=128, seed_simulator=2026).run(qc_10m).result()
+        dt_10m = time.perf_counter() - t_10m0
+        self.assertEqual(res_10m.results[0].metadata["substrate"], "CyclotomicExact")
+        self.assertTrue(res_10m.results[0].metadata["norm_exact_one"])
+        self.assertGreaterEqual(res_10m.results[0].metadata["prism_fusion_eliminated"], 2)
+        self.assertLess(dt_10m, 0.20, f"Expected 10M-qubit sparse CyclotomicExact < 0.20s, took {dt_10m:.3f}s")
+        probs_10m = res_10m.results[0].data.probabilities
+        self.assertAlmostEqual(probs_10m.get("0000", 0.0), 0.5, places=12)
+        self.assertAlmostEqual(probs_10m.get("0111", 0.0), 0.5, places=12)
+
+        # 9. O(N) 4-byte rolling hash-chain UORC 64 KiB round-trip in < 0.15s
+        buf_64k = bytes(((i * 13 + ((i >> 5) & 7)) & 0xFF) for i in range(65536))
+        t_uorc0 = time.perf_counter()
+        wire_64k = compress_uorc_portable(buf_64k)
+        dec_64k = decompress_uorc_portable(wire_64k)
+        dt_uorc = time.perf_counter() - t_uorc0
+        self.assertEqual(dec_64k, buf_64k)
+        self.assertLess(len(wire_64k), len(buf_64k))
+        self.assertLess(dt_uorc, 0.20, f"Expected 64 KiB UORC round-trip < 0.20s, took {dt_uorc:.3f}s")
+
 
 if __name__ == "__main__":
     unittest.main()

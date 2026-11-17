@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ExecutedRollbackSession } from '../aqm/journal';
 import { gateArity, gateIsClifford } from '../aqm/prismKernel';
 import { CANONICAL_CIRCUIT_PRESETS } from '../aqm/slm';
@@ -60,6 +60,18 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
   const [wireB, setWireB] = useState<number>(1);
   const [branchChoice, setBranchChoice] = useState<ForcedCollapseBranch>('seeded');
   const [wireWindowStart, setWireWindowStart] = useState<number>(0);
+  const [stepWindowStart, setStepWindowStart] = useState<number>(0);
+
+  const stepPageCap = 48;
+  useEffect(() => {
+    setStepWindowStart((prev) => {
+      const maxStart = Math.max(0, spec.steps.length - stepPageCap);
+      const boundedPrev = Math.min(prev, maxStart);
+      if (cursor < boundedPrev) return cursor;
+      if (cursor > boundedPrev + stepPageCap) return Math.min(maxStart, cursor - stepPageCap);
+      return boundedPrev;
+    });
+  }, [cursor, spec.steps.length]);
 
   const activeFrame =
     session && session.frames.length > 0
@@ -123,7 +135,17 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
     Math.min(wireWindowStart, Math.max(0, spec.qubitCount - visibleWireCap)),
   );
   const visibleWireCount = Math.min(visibleWireCap, spec.qubitCount - clampedStart);
-  const visibleStepsCap = Math.min(spec.steps.length, 48);
+  const clampedStepStart = Math.max(
+    0,
+    Math.min(stepWindowStart, Math.max(0, spec.steps.length - stepPageCap)),
+  );
+  const visibleStepsCap = Math.min(stepPageCap, Math.max(0, spec.steps.length - clampedStepStart));
+  const journalPageCap = 160;
+  const journalStart = Math.max(
+    0,
+    Math.min(cursor - (journalPageCap >> 1), Math.max(0, spec.steps.length - journalPageCap)),
+  );
+  const visibleJournalSteps = spec.steps.slice(journalStart, journalStart + journalPageCap);
 
   return (
     <div className="max-w-[1380px] mx-auto px-6 py-6 space-y-6">
@@ -458,6 +480,34 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   </div>
                 )}
 
+                {spec.steps.length > stepPageCap && (
+                  <div className="flex items-center gap-1 mr-1 text-xs font-mono">
+                    <button
+                      type="button"
+                      disabled={clampedStepStart === 0}
+                      onClick={() => setStepWindowStart(Math.max(0, clampedStepStart - stepPageCap))}
+                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
+                    >
+                      ◀ Steps
+                    </button>
+                    <span className="text-slate-500">
+                      #{clampedStepStart + 1}–#{clampedStepStart + visibleStepsCap}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={clampedStepStart + stepPageCap >= spec.steps.length}
+                      onClick={() =>
+                        setStepWindowStart(
+                          Math.min(spec.steps.length - stepPageCap, clampedStepStart + stepPageCap),
+                        )
+                      }
+                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
+                    >
+                      Steps ▶
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => onSetCursor(0)}
@@ -501,9 +551,9 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                 aria-label="Quantum circuit diagram with rollback cursor"
               >
                 <line
-                  x1={74 + Math.min(cursor, visibleStepsCap) * 64}
+                  x1={74 + Math.max(0, Math.min(visibleStepsCap, cursor - clampedStepStart)) * 64}
                   y1={8}
-                  x2={74 + Math.min(cursor, visibleStepsCap) * 64}
+                  x2={74 + Math.max(0, Math.min(visibleStepsCap, cursor - clampedStepStart)) * 64}
                   y2={visibleWireCount * 44 + 18}
                   stroke="#10b981"
                   strokeWidth={2}
@@ -551,86 +601,89 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                   );
                 })}
 
-                {spec.steps.slice(0, visibleStepsCap).map((step, idx) => {
-                  const x = 106 + idx * 64;
-                  const executed = idx < cursor;
-                  const inCone = lightconeSet.has(idx);
-                  const w0 = step.targets[0] ?? 0;
-                  const inWin0 = w0 >= clampedStart && w0 < clampedStart + visibleWireCount;
-                  const w1 = step.targets[1] ?? w0;
-                  const inWin1 = w1 >= clampedStart && w1 < clampedStart + visibleWireCount;
-                  if (!inWin0 && !inWin1) return null;
+                {spec.steps
+                  .slice(clampedStepStart, clampedStepStart + visibleStepsCap)
+                  .map((step, localStepIdx) => {
+                    const idx = clampedStepStart + localStepIdx;
+                    const x = 106 + localStepIdx * 64;
+                    const executed = idx < cursor;
+                    const inCone = lightconeSet.has(idx);
+                    const w0 = step.targets[0] ?? 0;
+                    const inWin0 = w0 >= clampedStart && w0 < clampedStart + visibleWireCount;
+                    const w1 = step.targets[1] ?? w0;
+                    const inWin1 = w1 >= clampedStart && w1 < clampedStart + visibleWireCount;
+                    if (!inWin0 && !inWin1) return null;
 
-                  const local0 = Math.max(0, Math.min(visibleWireCount - 1, w0 - clampedStart));
-                  const y0 = 28 + local0 * 44;
-                  const strokeCol =
-                    step.kind === GateKind.MEASURE
-                      ? '#f59e0b'
-                      : inCone
-                        ? '#34d399'
-                        : executed
-                          ? '#38bdf8'
-                          : '#64748b';
-                  const fillCol =
-                    step.kind === GateKind.MEASURE
-                      ? '#451a03'
-                      : inCone
-                        ? '#064e3b'
-                        : executed
-                          ? '#0c4a6e'
-                          : '#0f172a';
+                    const local0 = Math.max(0, Math.min(visibleWireCount - 1, w0 - clampedStart));
+                    const y0 = 28 + local0 * 44;
+                    const strokeCol =
+                      step.kind === GateKind.MEASURE
+                        ? '#f59e0b'
+                        : inCone
+                          ? '#34d399'
+                          : executed
+                            ? '#38bdf8'
+                            : '#64748b';
+                    const fillCol =
+                      step.kind === GateKind.MEASURE
+                        ? '#451a03'
+                        : inCone
+                          ? '#064e3b'
+                          : executed
+                            ? '#0c4a6e'
+                            : '#0f172a';
 
-                  if (step.targets.length === 2) {
-                    const local1 = Math.max(0, Math.min(visibleWireCount - 1, w1 - clampedStart));
-                    const y1 = 28 + local1 * 44;
+                    if (step.targets.length === 2) {
+                      const local1 = Math.max(0, Math.min(visibleWireCount - 1, w1 - clampedStart));
+                      const y1 = 28 + local1 * 44;
+                      return (
+                        <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
+                          <line x1={x} y1={y0} x2={x} y2={y1} stroke={strokeCol} strokeWidth={2.2} />
+                          {inWin0 && <circle cx={x} cy={y0} r={5.5} fill={strokeCol} />}
+                          {inWin1 && (
+                            <>
+                              <circle cx={x} cy={y1} r={13} fill={fillCol} stroke={strokeCol} strokeWidth={1.8} />
+                              <text
+                                x={x}
+                                y={y1 + 4}
+                                textAnchor="middle"
+                                fill="#f8fafc"
+                                fontSize={10}
+                                fontFamily="IBM Plex Mono, monospace"
+                              >
+                                {step.kind === GateKind.CNOT ? '⊕' : step.kind}
+                              </text>
+                            </>
+                          )}
+                        </g>
+                      );
+                    }
+
                     return (
                       <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
-                        <line x1={x} y1={y0} x2={x} y2={y1} stroke={strokeCol} strokeWidth={2.2} />
-                        {inWin0 && <circle cx={x} cy={y0} r={5.5} fill={strokeCol} />}
-                        {inWin1 && (
-                          <>
-                            <circle cx={x} cy={y1} r={13} fill={fillCol} stroke={strokeCol} strokeWidth={1.8} />
-                            <text
-                              x={x}
-                              y={y1 + 4}
-                              textAnchor="middle"
-                              fill="#f8fafc"
-                              fontSize={10}
-                              fontFamily="IBM Plex Mono, monospace"
-                            >
-                              {step.kind === GateKind.CNOT ? '⊕' : step.kind}
-                            </text>
-                          </>
-                        )}
+                        <rect
+                          x={x - 17}
+                          y={y0 - 15}
+                          width={34}
+                          height={30}
+                          rx={6}
+                          fill={fillCol}
+                          stroke={strokeCol}
+                          strokeWidth={1.8}
+                        />
+                        <text
+                          x={x}
+                          y={y0 + 4}
+                          textAnchor="middle"
+                          fill="#f8fafc"
+                          fontSize={11}
+                          fontFamily="IBM Plex Mono, monospace"
+                        >
+                          {step.kind === GateKind.MEASURE ? 'M' : step.kind}
+                        </text>
                       </g>
                     );
-                  }
-
-                  return (
-                    <g key={step.id} onClick={() => onSetCursor(idx + 1)} className="cursor-pointer">
-                      <rect
-                        x={x - 17}
-                        y={y0 - 15}
-                        width={34}
-                        height={30}
-                        rx={6}
-                        fill={fillCol}
-                        stroke={strokeCol}
-                        strokeWidth={1.8}
-                      />
-                      <text
-                        x={x}
-                        y={y0 + 4}
-                        textAnchor="middle"
-                        fill="#f8fafc"
-                        fontSize={11}
-                        fontFamily="IBM Plex Mono, monospace"
-                      >
-                        {step.kind === GateKind.MEASURE ? 'M' : step.kind}
-                      </text>
-                    </g>
-                  );
-                })}
+                  })}
               </svg>
             </div>
 
@@ -641,10 +694,15 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
             ) : (
               <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                  SHA-256 Journal Steps ({spec.steps.length} total) & Measurement Branch Controls
+                  SHA-256 Journal Steps ({spec.steps.length} total
+                  {spec.steps.length > journalPageCap
+                    ? ` · showing #${journalStart + 1}–#${journalStart + visibleJournalSteps.length} around cursor`
+                    : ''}
+                  ) &amp; Measurement Branch Controls
                 </div>
                 <div className="max-h-56 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-800/80">
-                  {spec.steps.slice(0, 160).map((step, idx) => {
+                  {visibleJournalSteps.map((step, localIdx) => {
+                    const idx = journalStart + localIdx;
                     const jEntry = session?.journal[idx];
                     const isActive = idx < cursor;
                     return (

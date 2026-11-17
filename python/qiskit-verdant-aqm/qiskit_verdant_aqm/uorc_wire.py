@@ -36,7 +36,13 @@ def is_uorc_archive(data: bytes | bytearray | memoryview) -> bool:
 def _encode_order_rope_rle(payload: bytes) -> bytes:
     out = bytearray()
     max_win = 1024
+    win_mask = max_win - 1
+    hash_buckets = 2048
+    hash_mask = hash_buckets - 1
+    max_chain = 32
     max_run = 127
+    head = [-1] * hash_buckets
+    prev = [-1] * max_win
     pos = 0
     lit_start = 0
     n = len(payload)
@@ -47,15 +53,27 @@ def _encode_order_rope_rle(payload: bytes) -> bytes:
         best_len = 0
 
         if pos + 4 <= n:
-            cand = win_start
-            while cand < pos:
-                mlen = 0
-                while pos + mlen < n and mlen < max_run and payload[cand + mlen] == payload[pos + mlen]:
-                    mlen += 1
-                if mlen >= 4 and mlen > best_len:
-                    best_len = mlen
-                    best_off = pos - cand
-                cand += 1
+            b0 = payload[pos]
+            h = ((b0 << 10) ^ (payload[pos + 1] << 6) ^ (payload[pos + 2] << 3) ^ payload[pos + 3] ^ (b0 >> 2)) & hash_mask
+            cand = head[h]
+            steps = 0
+            max_match = min(max_run, n - pos)
+
+            while cand >= win_start and steps < max_chain:
+                if payload[cand + best_len] == payload[pos + best_len] and payload[cand] == b0:
+                    mlen = 0
+                    while mlen < max_match and payload[cand + mlen] == payload[pos + mlen]:
+                        mlen += 1
+                    if mlen >= 4 and mlen > best_len:
+                        best_len = mlen
+                        best_off = pos - cand
+                        if best_len == max_match:
+                            break
+                cand = prev[cand & win_mask]
+                steps += 1
+
+            prev[pos & win_mask] = head[h]
+            head[h] = pos
 
         if best_len >= 4:
             while lit_start < pos:
@@ -66,7 +84,15 @@ def _encode_order_rope_rle(payload: bytes) -> bytes:
                 lit_start += chunk
             out.append(1)
             out.extend(struct.pack("<HB", best_off, best_len))
-            pos += best_len
+            end_pos = pos + best_len
+            ins = pos + 1
+            while ins < end_pos and ins + 4 <= n:
+                ib0 = payload[ins]
+                ih = ((ib0 << 10) ^ (payload[ins + 1] << 6) ^ (payload[ins + 2] << 3) ^ payload[ins + 3] ^ (ib0 >> 2)) & hash_mask
+                prev[ins & win_mask] = head[ih]
+                head[ih] = ins
+                ins += 1
+            pos = end_pos
             lit_start = pos
         else:
             pos += 1

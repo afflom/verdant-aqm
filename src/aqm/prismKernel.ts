@@ -443,18 +443,18 @@ export function optimizeCircuitPrismMonoid(
       changed = false;
       pass += ONE;
 
-      // Pass A: O(G) precomputed next-touch-is-diagonal table per wire
-      const nextTouchIsDiag = new Uint8Array(spec.qubitCount);
+      // Pass A: O(G) sparse precomputed next-touch-is-diagonal table per active wire
+      const nextTouchIsDiag = new Map<number, number>();
       const nextStepHasDiagAhead = new Uint8Array(working.length);
       for (let i = working.length - ONE; i >= ZERO; i -= ONE) {
         const st = working[i];
         if (st.targets.length === ONE) {
           const w = st.targets[ZERO];
-          nextStepHasDiagAhead[i] = nextTouchIsDiag[w];
-          nextTouchIsDiag[w] = diagonalOctants(st.kind) !== null ? ONE : ZERO;
+          nextStepHasDiagAhead[i] = nextTouchIsDiag.get(w) ?? ZERO;
+          nextTouchIsDiag.set(w, diagonalOctants(st.kind) !== null ? ONE : ZERO);
         } else {
           for (const w of st.targets) {
-            nextTouchIsDiag[w] = ZERO;
+            nextTouchIsDiag.set(w, ZERO);
           }
         }
       }
@@ -484,25 +484,27 @@ export function optimizeCircuitPrismMonoid(
         }
       }
 
-      // Pass B: O(G) per-wire last-index algebraic fusion & 2-qubit involution cancellation
+      // Pass B: O(G) sparse per-wire last-index algebraic fusion & 2-qubit involution cancellation
       const nextList: AqmGateStep[] = [];
-      const lastOnWire = new Int32Array(spec.qubitCount).fill(-ONE);
+      const lastOnWire = new Map<number, number>();
+
+      const getLastOnWire = (wire: number): number => lastOnWire.get(wire) ?? -ONE;
 
       const recomputeLastOnWire = (wire: number, beforeIdx: number) => {
-        lastOnWire[wire] = -ONE;
+        lastOnWire.delete(wire);
         for (let k = Math.min(beforeIdx, nextList.length - ONE); k >= ZERO; k -= ONE) {
           if (nextList[k].targets.includes(wire)) {
-            lastOnWire[wire] = k;
+            lastOnWire.set(wire, k);
             break;
           }
         }
       };
 
       const rebuildFrom = (startIdx: number) => {
-        lastOnWire.fill(-ONE);
+        lastOnWire.clear();
         for (let k = ZERO; k < nextList.length; k += ONE) {
           for (const tw of nextList[k].targets) {
-            lastOnWire[tw] = k;
+            lastOnWire.set(tw, k);
           }
         }
         void startIdx;
@@ -511,25 +513,26 @@ export function optimizeCircuitPrismMonoid(
       for (const step of working) {
         if (nextList.length === ZERO) {
           const idx = nextList.push(step) - ONE;
-          for (const tw of step.targets) lastOnWire[tw] = idx;
+          for (const tw of step.targets) lastOnWire.set(tw, idx);
           continue;
         }
 
         let prevIdx = -ONE;
         for (const tw of step.targets) {
-          if (lastOnWire[tw] > prevIdx) prevIdx = lastOnWire[tw];
+          const lw = getLastOnWire(tw);
+          if (lw > prevIdx) prevIdx = lw;
         }
 
         if (prevIdx < ZERO) {
           const idx = nextList.push(step) - ONE;
-          for (const tw of step.targets) lastOnWire[tw] = idx;
+          for (const tw of step.targets) lastOnWire.set(tw, idx);
           continue;
         }
 
         const prev = nextList[prevIdx];
         if (prev.kind === GateKind.MEASURE || step.kind === GateKind.MEASURE) {
           const idx = nextList.push(step) - ONE;
-          for (const tw of step.targets) lastOnWire[tw] = idx;
+          for (const tw of step.targets) lastOnWire.set(tw, idx);
           continue;
         }
 
@@ -545,7 +548,7 @@ export function optimizeCircuitPrismMonoid(
               nextList.pop();
               recomputeLastOnWire(w, nextList.length - ONE);
               for (const ex of expanded) {
-                lastOnWire[w] = nextList.push(ex) - ONE;
+                lastOnWire.set(w, nextList.push(ex) - ONE);
               }
             } else {
               nextList.splice(prevIdx, ONE, ...expanded);
@@ -601,7 +604,7 @@ export function optimizeCircuitPrismMonoid(
           }
 
           const idx = nextList.push(step) - ONE;
-          lastOnWire[w] = idx;
+          lastOnWire.set(w, idx);
           continue;
         }
 
@@ -609,7 +612,7 @@ export function optimizeCircuitPrismMonoid(
         if (prev.targets.length === TWO && step.targets.length === TWO) {
           const [a0, a1] = prev.targets;
           const [b0, b1] = step.targets;
-          const unobstructedBoth = lastOnWire[a0] === prevIdx && lastOnWire[a1] === prevIdx;
+          const unobstructedBoth = getLastOnWire(a0) === prevIdx && getLastOnWire(a1) === prevIdx;
 
           if (unobstructedBoth) {
             const sameOrdered = a0 === b0 && a1 === b1;
@@ -635,7 +638,7 @@ export function optimizeCircuitPrismMonoid(
         }
 
         const idx = nextList.push(step) - ONE;
-        for (const tw of step.targets) lastOnWire[tw] = idx;
+        for (const tw of step.targets) lastOnWire.set(tw, idx);
       }
       working = nextList;
     }

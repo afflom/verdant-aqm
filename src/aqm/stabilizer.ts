@@ -369,6 +369,16 @@ export function createColumnBitPlaneTableau(n: number): ColumnBitPlaneTableau {
   return { n, planesPerCol, colX, colZ, rPlanes };
 }
 
+export function cloneColumnBitPlaneTableau(tab: ColumnBitPlaneTableau): ColumnBitPlaneTableau {
+  return {
+    n: tab.n,
+    planesPerCol: tab.planesPerCol,
+    colX: new Uint32Array(tab.colX),
+    colZ: new Uint32Array(tab.colZ),
+    rPlanes: new Uint32Array(tab.rPlanes),
+  };
+}
+
 export function applyCliffordColumnBitPlane(
   tab: ColumnBitPlaneTableau,
   step: AqmGateStep,
@@ -454,6 +464,186 @@ export function executeStabilizerBatch(
     applyCliffordColumnBitPlane(tab, steps[i]);
   }
   return tab;
+}
+
+function popcount32(x: number): number {
+  let v = x >>> 0;
+  v -= (v >>> 1) & 0x55555555;
+  v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+  return (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+}
+
+/**
+ * Zero-transpose bit-sliced projective Z collapse directly on `ColumnBitPlaneTableau`
+ * (`Quantum.lex.tex :: inv016BitSlicedStabilizerCollapseMod4`).
+ * Eliminates all `row <-> column` matrix transposes during mid-circuit `measure` and `reset`!
+ */
+export function measureColumnBitPlaneWire(
+  tab: ColumnBitPlaneTableau,
+  wire: number,
+  randBit: 0 | 1,
+): 0 | 1 {
+  const { n, planesPerCol, colX, colZ, rPlanes } = tab;
+  const rows = TWO * n;
+  const wireBase = wire * planesPerCol;
+
+  let pRow = -ONE;
+  for (let row = n; row < rows; row += ONE) {
+    const w = row >>> 5;
+    const m = (ONE << (row & 31)) >>> 0;
+    if ((colX[wireBase + w] & m) !== ZERO) {
+      pRow = row;
+      break;
+    }
+  }
+
+  if (pRow >= n) {
+    const dstRow = pRow - n;
+    const srcW = pRow >>> 5;
+    const srcM = (ONE << (pRow & 31)) >>> 0;
+    const dstW = dstRow >>> 5;
+    const dstM = (ONE << (dstRow & 31)) >>> 0;
+
+    const elim = new Uint32Array(planesPerCol);
+    for (let w = ZERO; w < planesPerCol; w += ONE) {
+      elim[w] = colX[wireBase + w];
+    }
+    elim[srcW] = (elim[srcW] & ~srcM) >>> 0;
+    elim[dstW] = (elim[dstW] & ~dstM) >>> 0;
+
+    const rPivot = (rPlanes[srcW] & srcM) !== ZERO;
+    const rBcast = rPivot ? 0xffffffff : ZERO;
+    const accLo = new Uint32Array(planesPerCol);
+    const accHi = new Uint32Array(planesPerCol);
+    for (let w = ZERO; w < planesPerCol; w += ONE) {
+      accHi[w] = ((rPlanes[w] ^ rBcast) & elim[w]) >>> 0;
+    }
+
+    for (let q = ZERO; q < n; q += ONE) {
+      const qb = q * planesPerCol;
+      const x1 = (colX[qb + srcW] & srcM) !== ZERO;
+      const z1 = (colZ[qb + srcW] & srcM) !== ZERO;
+      if (!x1 && !z1) continue;
+
+      for (let w = ZERO; w < planesPerCol; w += ONE) {
+        const em = elim[w];
+        if (em === ZERO) continue;
+        const x2 = (colX[qb + w] & em) >>> 0;
+        const z2 = (colZ[qb + w] & em) >>> 0;
+        const nx2 = (em ^ x2) >>> 0;
+        const nz2 = (em ^ z2) >>> 0;
+
+        let pos = ZERO;
+        let neg = ZERO;
+        if (x1 && z1) {
+          pos = (z2 & nx2) >>> 0;
+          neg = (x2 & nz2) >>> 0;
+        } else if (x1) {
+          pos = (x2 & z2) >>> 0;
+          neg = (z2 & nx2) >>> 0;
+        } else {
+          pos = (x2 & nz2) >>> 0;
+          neg = (x2 & z2) >>> 0;
+        }
+
+        const carry = (accLo[w] & pos) >>> 0;
+        accLo[w] = (accLo[w] ^ pos) >>> 0;
+        accHi[w] = (accHi[w] ^ carry) >>> 0;
+
+        const borrow = ((~accLo[w]) & neg) >>> 0;
+        accLo[w] = (accLo[w] ^ neg) >>> 0;
+        accHi[w] = (accHi[w] ^ borrow) >>> 0;
+
+        if (x1) colX[qb + w] = (colX[qb + w] ^ em) >>> 0;
+        if (z1) colZ[qb + w] = (colZ[qb + w] ^ em) >>> 0;
+      }
+    }
+
+    for (let w = ZERO; w < planesPerCol; w += ONE) {
+      const em = elim[w];
+      rPlanes[w] = ((rPlanes[w] & ~em) | (accHi[w] & ~accLo[w] & em)) >>> 0;
+    }
+
+    for (let q = ZERO; q < n; q += ONE) {
+      const qb = q * planesPerCol;
+      const sx = (colX[qb + srcW] & srcM) !== ZERO;
+      const sz = (colZ[qb + srcW] & srcM) !== ZERO;
+      if (sx) colX[qb + dstW] = (colX[qb + dstW] | dstM) >>> 0;
+      else colX[qb + dstW] = (colX[qb + dstW] & ~dstM) >>> 0;
+      if (sz) colZ[qb + dstW] = (colZ[qb + dstW] | dstM) >>> 0;
+      else colZ[qb + dstW] = (colZ[qb + dstW] & ~dstM) >>> 0;
+      colX[qb + srcW] = (colX[qb + srcW] & ~srcM) >>> 0;
+      colZ[qb + srcW] = (colZ[qb + srcW] & ~srcM) >>> 0;
+    }
+    colZ[wireBase + srcW] = (colZ[wireBase + srcW] | srcM) >>> 0;
+
+    if (rPivot) rPlanes[dstW] = (rPlanes[dstW] | dstM) >>> 0;
+    else rPlanes[dstW] = (rPlanes[dstW] & ~dstM) >>> 0;
+    if (randBit === ONE) rPlanes[srcW] = (rPlanes[srcW] | srcM) >>> 0;
+    else rPlanes[srcW] = (rPlanes[srcW] & ~srcM) >>> 0;
+
+    return randBit;
+  }
+
+  // Deterministic collapse branch: accumulate product of s_{d+n} where X[d, wire] == 1
+  const prod = new Uint32Array(planesPerCol);
+  let prodCount = ZERO;
+  for (let d = ZERO; d < n; d += ONE) {
+    const dw = d >>> 5;
+    const dm = (ONE << (d & 31)) >>> 0;
+    if ((colX[wireBase + dw] & dm) !== ZERO) {
+      const sRow = d + n;
+      prod[sRow >>> 5] = (prod[sRow >>> 5] | (ONE << (sRow & 31))) >>> 0;
+      prodCount += ONE;
+    }
+  }
+  if (prodCount === ZERO) return ZERO;
+
+  let rParity = ZERO;
+  for (let w = ZERO; w < planesPerCol; w += ONE) {
+    rParity ^= popcount32(rPlanes[w] & prod[w]) & ONE;
+  }
+  if (prodCount === ONE) {
+    return rParity === ONE ? ONE : ZERO;
+  }
+
+  let accMod4 = rParity === ONE ? TWO : ZERO;
+  for (let q = ZERO; q < n; q += ONE) {
+    const qb = q * planesPerCol;
+    let active = ZERO;
+    for (let w = ZERO; w < planesPerCol; w += ONE) {
+      active += popcount32((colX[qb + w] | colZ[qb + w]) & prod[w]);
+      if (active >= TWO) break;
+    }
+    if (active < TWO) continue;
+
+    let sx = ZERO;
+    let sz = ZERO;
+    for (let w = ZERO; w < planesPerCol; w += ONE) {
+      const xw = (colX[qb + w] & prod[w]) >>> 0;
+      const zw = (colZ[qb + w] & prod[w]) >>> 0;
+      let mw = (xw | zw) >>> 0;
+      while (mw !== ZERO) {
+        const lb = (mw & -mw) >>> 0;
+        const x1 = (xw & lb) !== ZERO ? ONE : ZERO;
+        const z1 = (zw & lb) !== ZERO ? ONE : ZERO;
+        const pos =
+          (x1 === ONE && z1 === ONE && sx === ZERO && sz === ONE) ||
+          (x1 === ONE && z1 === ZERO && sx === ONE && sz === ONE) ||
+          (x1 === ZERO && z1 === ONE && sx === ONE && sz === ZERO);
+        const neg =
+          (x1 === ONE && z1 === ONE && sx === ONE && sz === ZERO) ||
+          (x1 === ZERO && z1 === ONE && sx === ONE && sz === ONE) ||
+          (x1 === ONE && z1 === ZERO && sx === ZERO && sz === ONE);
+        if (pos) accMod4 = (accMod4 + ONE) & 3;
+        else if (neg) accMod4 = (accMod4 + THREE) & 3;
+        sx ^= x1;
+        sz ^= z1;
+        mw = (mw ^ lb) >>> 0;
+      }
+    }
+  }
+  return accMod4 === TWO ? ONE : ZERO;
 }
 
 export function columnPlanesToSymplecticTableau(colTab: ColumnBitPlaneTableau): SymplecticTableau {
@@ -617,17 +807,22 @@ export function compileAffineStabilizerMeasurementFrame(
  * Verifies pairwise symplectic commutativity of all n active stabilizer rows [n..2n-1]
  * using 64-bit word-parallel bitwise AND/XOR + popcount!
  */
-export function verifyStabilizersCommute(tab: SymplecticTableau): {
+export function verifyStabilizersCommute(
+  tab: SymplecticTableau,
+  maxSampledRows?: number,
+): {
   commutes: boolean;
   checkedPairs: number;
 } {
   const { n, wordsPerRow, xWords, zWords } = tab;
   const lastMask = makeLastWordMask(n);
   let checkedPairs = ZERO;
+  const rowLimit =
+    maxSampledRows !== undefined ? Math.min(TWO * n, n + maxSampledRows) : TWO * n;
 
-  for (let i = n; i < TWO * n; i += ONE) {
+  for (let i = n; i < rowLimit; i += ONE) {
     const baseI = i * wordsPerRow;
-    for (let j = i + ONE; j < TWO * n; j += ONE) {
+    for (let j = i + ONE; j < rowLimit; j += ONE) {
       checkedPairs += ONE;
       const baseJ = j * wordsPerRow;
       let parity = ZERO;

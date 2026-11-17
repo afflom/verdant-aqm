@@ -35,12 +35,12 @@ import {
   verifyQiskitTargetUnbounded,
 } from './prismKernel';
 import {
-  cloneTableau,
-  columnPlanesToSymplecticTableau,
+  applyCliffordColumnBitPlane,
+  cloneColumnBitPlaneTableau,
   compileAffineStabilizerMeasurementFrame,
   executeStabilizerBatch,
+  measureColumnBitPlaneWire,
   parityBigInt,
-  stepStabilizerTableau,
   verifyStabilizersCommute,
 } from './stabilizer';
 import { ONE, TWO, ZERO } from './stratum0';
@@ -1367,98 +1367,88 @@ function computeStabilizerPauliExpectation(
   //   - Otherwise P' = (+- 1) * Z^{b_0} (x) ... (x) Z^{b_{n-1}}, and `<0| Z^b |0> = +1`, so `<0| P' |0> = +- 1`!!
   // THINK ABOUT THAT! Conjugating a single Pauli string backward through `m` Clifford gates takes `O(m)` time and `O(n)` bits of memory — even for `1,000,000` qubits!!
   const n = circuit.numQubits;
-  const px = new Uint8Array(n);
-  const pz = new Uint8Array(n);
+  const px = new Set<number>();
+  const pz = new Set<number>();
+  const setBit = (s: Set<number>, q: number, val: boolean) => {
+    if (val) s.add(q);
+    else s.delete(q);
+  };
   let phaseMod4 = 0; // 0:+1, 1:+i, 2:-1, 3:-i — represents P = i^{phaseMod4} * prod_q X^{px[q]} Z^{pz[q]}
 
   for (let q = 0; q < n; q += 1) {
     const ch = clean[n - 1 - q];
     if (ch === 'I') continue;
-    else if (ch === 'X') px[q] = 1;
-    else if (ch === 'Z') pz[q] = 1;
+    else if (ch === 'X') px.add(q);
+    else if (ch === 'Z') pz.add(q);
     else if (ch === 'Y') {
       // Y = i X Z
-      px[q] = 1;
-      pz[q] = 1;
+      px.add(q);
+      pz.add(q);
       phaseMod4 = (phaseMod4 + 1) & 3;
     } else {
       return null;
     }
   }
 
-  // Conjugate P -> g^\dagger P g for each step g in reverse order!
+  // Conjugate P -> g^\dagger P g for each step g in reverse order in O(|steps|) sparse Set operations!
   for (let idx = steps.length - 1; idx >= 0; idx -= 1) {
     const st = steps[idx];
     const q0 = st.targets[0];
     switch (st.kind) {
       case GateKind.H: {
-        // H X H = Z, H Z H = X, H (X Z) H = - X Z
-        if (px[q0] === 1 && pz[q0] === 1) phaseMod4 = (phaseMod4 + 2) & 3;
-        const tmp = px[q0];
-        px[q0] = pz[q0];
-        pz[q0] = tmp;
+        const hx = px.has(q0);
+        const hz = pz.has(q0);
+        if (hx && hz) phaseMod4 = (phaseMod4 + 2) & 3;
+        setBit(px, q0, hz);
+        setBit(pz, q0, hx);
         break;
       }
       case GateKind.S: {
-        // S^\dagger X S = -Y = -i X Z (phase +3); S^\dagger Z S = Z; S^\dagger (X Z) S = (-i X Z) Z = -i X (phase +3)
-        if (px[q0] === 1) {
+        if (px.has(q0)) {
           phaseMod4 = (phaseMod4 + 3) & 3;
-          pz[q0] ^= 1;
+          setBit(pz, q0, !pz.has(q0));
         }
         break;
       }
       case GateKind.X:
-        if (pz[q0] === 1) phaseMod4 = (phaseMod4 + 2) & 3;
+        if (pz.has(q0)) phaseMod4 = (phaseMod4 + 2) & 3;
         break;
       case GateKind.Z:
-        if (px[q0] === 1) phaseMod4 = (phaseMod4 + 2) & 3;
+        if (px.has(q0)) phaseMod4 = (phaseMod4 + 2) & 3;
         break;
       case GateKind.Y:
-        if ((px[q0] ^ pz[q0]) === 1) phaseMod4 = (phaseMod4 + 2) & 3;
+        if (px.has(q0) !== pz.has(q0)) phaseMod4 = (phaseMod4 + 2) & 3;
         break;
       case GateKind.CNOT: {
-        // CNOT(c, t) is self-adjoint:
-        // X_c -> X_c X_t; Z_t -> Z_c Z_t
-        // Check careful phase when X_c and Z_t both present:
-        // (X_c Z_t) -> (X_c X_t)(Z_c Z_t) = X_c Z_c X_t Z_t.
-        // In our representation `X^x Z^z`:
-        // Initial: X_c^{xc} Z_c^{zc} X_t^{xt} Z_t^{zt}.
-        // Conjugated: (X_c X_t)^{xc} Z_c^{zc} X_t^{xt} (Z_c Z_t)^{zt}
-        // Move Z_c^{zt} left past X_t^{xc ^ xt} (commutes!) and Z_c^{zc} (commutes!) -> lands right of X_c^{xc}!
-        // Wait: X_t^{xc} * X_t^{xt} = X_t^{xc ^ xt} with NO sign!
-        // Wait: what about moving X_t^{xc} past Z_c^{zc}? Different wires, commutes!
-        // So `(X_c X_t)^{xc} Z_c^{zc} X_t^{xt} (Z_c Z_t)^{zt} = X_c^{xc} Z_c^{zc ^ zt} X_t^{xc ^ xt} Z_t^{zt}` WITH ZERO SIGN FLIP!!
-        // Let's double check on Y_c Y_t = (i X_c Z_c)(i X_t Z_t) = - X_c Z_c X_t Z_t (`xc=1, zc=1, xt=1, zt=1`, `phaseMod4 = 2`):
-        // Formula gives `xc'=1, zc'=0, xt'=0, zt'=1`, `phaseMod4 = 2` -> `- X_c Z_t`!
-        // Check: CNOT (Y (x) Y) CNOT: Y_c Y_t = (X_c Y_c? No): CNOT (Y_c Y_t) CNOT = (X_c X_t (-Z_c)) (X_t Z_t)?
-        // CNOT Y_c CNOT = Y_c X_t; CNOT Y_t CNOT = Z_c Y_t; product = (Y_c X_t)(Z_c Y_t) = (Y_c Z_c)(X_t Y_t) = (i X_c)(i Z_t) = - X_c Z_t!! EXACT MATCH!!
         const c = st.targets[0];
         const t = st.targets[1];
-        const xc = px[c];
-        const zt = pz[t];
-        pz[c] ^= zt;
-        px[t] ^= xc;
+        const xc = px.has(c);
+        const zt = pz.has(t);
+        if (zt) setBit(pz, c, !pz.has(c));
+        if (xc) setBit(px, t, !px.has(t));
         break;
       }
       case GateKind.CZ: {
-        // CZ is self-adjoint: X_a -> X_a Z_b, X_b -> Z_a X_b
-        // Initial: X_a^{xa} Z_a^{za} X_b^{xb} Z_b^{zb}
-        // -> (X_a Z_b)^{xa} Z_a^{za} (Z_a X_b)^{xb} Z_b^{zb}
-        // Move Z_b^{xa} right past X_b^{xb}: flips sign iff xa == 1 && xb == 1!
         const a = st.targets[0];
         const b = st.targets[1];
-        const xa = px[a];
-        const xb = px[b];
-        if (xa === 1 && xb === 1) phaseMod4 = (phaseMod4 + 2) & 3;
-        pz[a] ^= xb;
-        pz[b] ^= xa;
+        const xa = px.has(a);
+        const xb = px.has(b);
+        if (xa && xb) phaseMod4 = (phaseMod4 + 2) & 3;
+        if (xb) setBit(pz, a, !pz.has(a));
+        if (xa) setBit(pz, b, !pz.has(b));
         break;
       }
       case GateKind.SWAP: {
         const a = st.targets[0];
         const b = st.targets[1];
-        const tx = px[a]; px[a] = px[b]; px[b] = tx;
-        const tz = pz[a]; pz[a] = pz[b]; pz[b] = tz;
+        const ax = px.has(a);
+        const bx = px.has(b);
+        setBit(px, a, bx);
+        setBit(px, b, ax);
+        const az = pz.has(a);
+        const bz = pz.has(b);
+        setBit(pz, a, bz);
+        setBit(pz, b, az);
         break;
       }
       default:
@@ -1466,9 +1456,7 @@ function computeStabilizerPauliExpectation(
     }
   }
 
-  for (let q = 0; q < n; q += 1) {
-    if (px[q] !== 0) return 0;
-  }
+  if (px.size > 0) return 0;
   if (phaseMod4 === 0) return 1;
   if (phaseMod4 === 2) return -1;
   return 0;
@@ -2129,12 +2117,30 @@ export class VerdantAqmBackend {
         const execSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawSteps;
         fusionEliminated = fused && fused.ok ? fused.gatesEliminated : 0;
 
-        const cyc = executeCyclotomicBatch(circuit.numQubits, execSteps);
+        const wireToCompact = new Map<number, number>();
+        const compactSteps: AqmGateStep[] = execSteps.map((st) => ({
+          ...st,
+          targets: st.targets.map((q) => {
+            let cIdx = wireToCompact.get(q);
+            if (cIdx === undefined) {
+              cIdx = wireToCompact.size;
+              wireToCompact.set(q, cIdx);
+            }
+            return cIdx;
+          }),
+        }));
+        const cyc = executeCyclotomicBatch(Math.max(1, wireToCompact.size), compactSteps);
         const normSq = computeExactTotalNormSqSparse(cyc.support);
         normExactOne = normSq.p === cyc.normDenom.p && normSq.q === cyc.normDenom.q;
         activeKets = cyc.support.size;
 
         if (measureOps.length > 0 && circuit.numClbits > 0) {
+          const measCompact = measureOps.map((mOp) => ({
+            clbit: mOp.clbits![0],
+            cBitMask: wireToCompact.has(mOp.qubits[0])
+              ? 1n << BigInt(wireToCompact.get(mOp.qubits[0])!)
+              : 0n,
+          }));
           // Exact analytical probability distribution over active kets with BigInt-safe ratio scaling!
           const denMaxBit = Math.max(
             cyc.normDenom.p === 0n ? 0 : (cyc.normDenom.p < 0n ? -cyc.normDenom.p : cyc.normDenom.p).toString(2).length,
@@ -2156,10 +2162,8 @@ export class VerdantAqmBackend {
             const prob = numerFloat * invDenom;
             if (prob > 1e-16) {
               const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-              for (const mOp of measureOps) {
-                const q = mOp.qubits[0];
-                const c = mOp.clbits![0];
-                clbits[c] = (ket & (1n << BigInt(q))) !== 0n ? 1 : 0;
+              for (const mc of measCompact) {
+                clbits[mc.clbit] = mc.cBitMask !== 0n && (ket & mc.cBitMask) !== 0n ? 1 : 0;
               }
               const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
               probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
@@ -2209,12 +2213,10 @@ export class VerdantAqmBackend {
         : null;
       const prefixSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawPrefixSteps;
       fusionEliminated = fused && fused.ok ? fused.gatesEliminated : 0;
-      const baseTab = columnPlanesToSymplecticTableau(
-        executeStabilizerBatch(circuit.numQubits, prefixSteps),
-      );
+      const baseColTab = executeStabilizerBatch(circuit.numQubits, prefixSteps);
       activeKets = circuit.numQubits;
 
-      // Pre-compile tail instructions into fast step actions once
+      // Pre-compile tail instructions into fast bit-plane step actions once
       const tailCompiled = tailInstructions.map((inst, tIdx) => {
         const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
         if (canon === 'measure') {
@@ -2234,34 +2236,31 @@ export class VerdantAqmBackend {
       });
 
       for (let s = 0; s < cfg.shots; s += 1) {
-        let curTab = cloneTableau(baseTab);
+        const curTab = cloneColumnBitPlaneTableau(baseColTab);
         const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
         for (const action of tailCompiled) {
           if (action.kind === 'measure') {
-            const m = stepStabilizerTableau(
+            clbits[action.clbit] = measureColumnBitPlaneWire(
               curTab,
-              { id: 'mc-m', kind: GateKind.MEASURE, targets: [action.wire] },
-              rng(),
+              action.wire,
+              rng() >= 0.5 ? 1 : 0,
             );
-            curTab = m.nextTableau as ReturnType<typeof cloneTableau>;
-            clbits[action.clbit] = m.measurementOutcome!.outcome;
           } else if (action.kind === 'reset') {
-            const m = stepStabilizerTableau(
+            const out = measureColumnBitPlaneWire(
               curTab,
-              { id: 'mc-r', kind: GateKind.MEASURE, targets: [action.wire] },
-              rng(),
+              action.wire,
+              rng() >= 0.5 ? 1 : 0,
             );
-            curTab = m.nextTableau as ReturnType<typeof cloneTableau>;
-            if (m.measurementOutcome!.outcome === 1) {
-              curTab = stepStabilizerTableau(
-                curTab,
-                { id: 'mc-rx', kind: GateKind.X, targets: [action.wire] },
-                0.5,
-              ).nextTableau as ReturnType<typeof cloneTableau>;
+            if (out === 1) {
+              applyCliffordColumnBitPlane(curTab, {
+                id: 'mc-rx',
+                kind: GateKind.X,
+                targets: [action.wire],
+              });
             }
           } else if (action.kind === 'unitary') {
             for (const st of action.steps) {
-              curTab = stepStabilizerTableau(curTab, st, 0.5).nextTableau as ReturnType<typeof cloneTableau>;
+              applyCliffordColumnBitPlane(curTab, st);
             }
           }
         }

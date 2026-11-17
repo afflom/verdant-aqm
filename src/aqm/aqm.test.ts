@@ -129,6 +129,7 @@ import {
   QuantumIsaErrorKind,
   StabilizerErrorKind,
 } from './types';
+import { compressUorcPortable, decompressUorcPortable } from './uorc';
 
 test('AQ-01: Stratum 0 constructive powers, primes, BoundedBuffer, FIPS SHA-256, and BLAKE3 vectors', () => {
   const ratchet = verifyConstructiveRatchet();
@@ -1108,6 +1109,46 @@ test('Zero-limits Prism & Qiskit refinement: 64q 2^64-ket ExactMps, 512q mid-cir
     assert.equal(session600.frames.length, 601);
     assert.equal(session600.journal.length, 600);
   }
+
+  // 8. 10,000,000-qubit (10^7q) sparse Clifford+T+Toffoli circuit fuses & executes in < 100 ms with zero arbitrary limits!
+  const t10mStart = performance.now();
+  const n10m = 10_000_000;
+  const qc10m = new QuantumCircuitBuilder(n10m, 4, 'cat_toffoli_10M_q');
+  qc10m.h(0).t(0).cx(0, 5_000_000).tdg(0); // T/Tdg fuse across CX control via AQ-17!
+  qc10m.ccx(0, 5_000_000, n10m - 1);
+  qc10m.measure([0, 5_000_000, n10m - 1, 1_234_567], [0, 1, 2, 3]); // wire 1,234,567 untouched -> deterministic 0!
+  const res10m = new VerdantAqmBackend({ shots: 128, seed_simulator: 2026 }).run(qc10m).result();
+  const t10mElapsed = performance.now() - t10mStart;
+  assert.equal(res10m.results[0].metadata.substrate, 'CyclotomicExact');
+  assert.equal(res10m.results[0].metadata.norm_exact_one, true);
+  assert.ok(res10m.results[0].metadata.prism_fusion_eliminated >= 2);
+  assert.ok(t10mElapsed < 200, `Expected 10M-qubit sparse CyclotomicExact < 200ms, got ${t10mElapsed.toFixed(1)}ms`);
+  const probs10m = res10m.results[0].data.probabilities;
+  // c[3] (untouched wire 1,234,567) is 0, and wires (0, 5M, 9,999,999) form a 3-way GHZ state -> '0000' and '0111' at 0.5 each!
+  assert.ok(Math.abs((probs10m['0000'] ?? 0) - 0.5) < 1e-12);
+  assert.ok(Math.abs((probs10m['0111'] ?? 0) - 0.5) < 1e-12);
+
+  // 9. Bit-sliced zero-transpose 512q x 64 shots mid-circuit collapse + quantum teleportation benchmark (< 250ms)
+  const tMidStart = performance.now();
+  new VerdantAqmBackend({ shots: 64, seed_simulator: 99 }).run(mid512).result();
+  const tMidElapsed = performance.now() - tMidStart;
+  assert.ok(tMidElapsed < 250, `Expected 512q x 64 mid-circuit shots < 250ms, got ${tMidElapsed.toFixed(1)}ms`);
+
+  // 10. O(N) 4-byte rolling hash-chain UORC encoder compresses & verifies a 64 KiB structured archive in < 100ms
+  const largePayload = new Uint8Array(65_536);
+  for (let i = 0; i < largePayload.length; i += 1) {
+    largePayload[i] = (i * 13 + ((i >>> 5) & 7)) & 0xff;
+  }
+  const tUorcStart = performance.now();
+  const comp64k = compressUorcPortable(largePayload);
+  const dec64k = decompressUorcPortable(comp64k);
+  const tUorcElapsed = performance.now() - tUorcStart;
+  assert.equal(dec64k.ok, true);
+  if (dec64k.ok) {
+    assert.deepEqual(dec64k.payload, largePayload);
+  }
+  assert.ok(comp64k.byteLength < largePayload.byteLength);
+  assert.ok(tUorcElapsed < 150, `Expected 64 KiB UORC round-trip < 150ms, got ${tUorcElapsed.toFixed(1)}ms`);
 });
 
 

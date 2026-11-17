@@ -68,6 +68,12 @@
       "statement": "pinnedAcceptanceVectorCount = 36 /\\ pinnedWasmExportCount = 6",
       "how": "Verified by WebAssembly.Module.imports(mod).length = 0 and 36/36 holo_run vector replay",
       "where": "app/src/Quality.lex.tex"
+    },
+    {
+      "name": "inv016BitSlicedStabilizerCollapseMod4",
+      "statement": "mod4CarrySaveAdd 0 true false = 1 /\\ mod4CarrySaveAdd 0 false true = 3 /\\ mod4CarrySaveAdd 3 true false = 0",
+      "how": "Proved by constructive kernel evaluation over 2-bit mod-4 carry-save phase accumulation in column-plane projective collapse",
+      "where": "app/src/Quantum.lex.tex"
     }
   ],
   "pinned": [

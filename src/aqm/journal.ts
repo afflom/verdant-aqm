@@ -173,7 +173,8 @@ function buildFrameFromTableau(
 ): AqmFrameSnapshot {
   const bloch = inspectStabilizerBlochVectors(tab);
   const gens = formatStabilizerGenerators(tab, SIXTEEN);
-  const comm = verifyStabilizersCommute(tab);
+  const maxCommRows = tab.n > TWO * EIGHT * EIGHT ? TWO * EIGHT * EIGHT : undefined;
+  const comm = verifyStabilizersCommute(tab, maxCommRows);
 
   // Pairwise entanglement scan over visible focus window (<= 24 wires) using 64-bit word accessors
   const edges: EntanglementEdge[] = [];

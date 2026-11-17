@@ -459,6 +459,28 @@ theorem{
   axioms: []
 }
 
+definition{
+  name: mod4CarrySaveAdd,
+  parameters: [acc : Nat, posBit : Bool, negBit : Bool],
+  result: Nat,
+  body: (if posBit
+    then ((acc + (natOne)) % (natFour))
+    else (if negBit
+      then ((acc + (natThree)) % (natFour))
+      else (acc % (natFour)))),
+  axioms: []
+}
+
+theorem{
+  name: inv016BitSlicedStabilizerCollapseMod4,
+  statement: ((((mod4CarrySaveAdd 0 true false) = (natOne))
+    ∧ ((mod4CarrySaveAdd (natOne) true false) = (natTwo)))
+    ∧ (((mod4CarrySaveAdd 0 false true) = (natThree))
+      ∧ ((mod4CarrySaveAdd (natThree) true false) = 0))),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}
 

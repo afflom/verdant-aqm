@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -31,16 +31,27 @@ import { quantumAudio } from './aqm/sonification';
 import { PauliFault, extractSurfaceCodeSyndromes } from './aqm/stabilizer';
 import { TropicalSyndromeDecodeResult, decodeSurfaceCodeTropical } from './aqm/tropical';
 import { AqmCircuitSpec } from './aqm/types';
-import { AtlasMegascalePanel } from './components/AtlasMegascalePanel';
-import { CircuitRollbackPanel } from './components/CircuitRollbackPanel';
-import { PrismVerifierPanel } from './components/PrismVerifierPanel';
-import { QiskitNotebookPanel } from './components/QiskitNotebookPanel';
 import {
   CameraPresetId,
   QuantumViewport3D,
   StudioSceneMode,
 } from './components/QuantumViewport3D';
-import { SurfaceCodePanel } from './components/SurfaceCodePanel';
+
+const AtlasMegascalePanel = lazy(() =>
+  import('./components/AtlasMegascalePanel').then((m) => ({ default: m.AtlasMegascalePanel })),
+);
+const CircuitRollbackPanel = lazy(() =>
+  import('./components/CircuitRollbackPanel').then((m) => ({ default: m.CircuitRollbackPanel })),
+);
+const PrismVerifierPanel = lazy(() =>
+  import('./components/PrismVerifierPanel').then((m) => ({ default: m.PrismVerifierPanel })),
+);
+const QiskitNotebookPanel = lazy(() =>
+  import('./components/QiskitNotebookPanel').then((m) => ({ default: m.QiskitNotebookPanel })),
+);
+const SurfaceCodePanel = lazy(() =>
+  import('./components/SurfaceCodePanel').then((m) => ({ default: m.SurfaceCodePanel })),
+);
 
 type ActiveWorkspace = 'studio' | 'qiskit' | 'circuit' | 'atlas-qec' | 'verifier';
 
@@ -686,107 +697,115 @@ export default function App() {
           </div>
         )}
 
-        {workspace === 'qiskit' && (
-          <QiskitNotebookPanel
-            onLoadCircuitIntoStudio={(compiledSpec) => {
-              handleUpdateSpec(compiledSpec, compiledSpec.steps.length);
-              setSceneMode('bloch');
-              setWorkspace('studio');
-            }}
-          />
-        )}
-
-        {workspace === 'circuit' && (
-          <CircuitRollbackPanel
-            spec={spec}
-            session={validSession}
-            compileError={compileError}
-            cursor={cursor}
-            selectedWire={selectedWire}
-            onUpdateSpec={handleUpdateSpec}
-            onSetCursor={handleSetCursorWithAudio}
-            onSelectWire={handleSelectWire}
-          />
-        )}
-
-        {workspace === 'atlas-qec' && (
-          <div className="space-y-2">
-            <div className="max-w-[1380px] mx-auto px-6 pt-5 flex items-center justify-between gap-4">
-              <div
-                className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-200/80 dark:bg-slate-900 border border-slate-300 dark:border-slate-800"
-                role="tablist"
-                aria-label="Atlas and Surface Code QEC sub-views"
-              >
-                {(
-                  [
-                    ['atlas', 'UOR Atlas UTQC & 4,096q Megascale'],
-                    ['qec', 'Rotated Surface-Code QEC (d=3..11)'],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="tab"
-                    aria-selected={atlasQecMode === id}
-                    onClick={() => setAtlasQecMode(id)}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                      atlasQecMode === id
-                        ? 'bg-emerald-600 text-white'
-                        : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+        <Suspense
+          fallback={
+            <div className="max-w-[1380px] mx-auto px-6 py-10 text-xs font-mono text-slate-500 dark:text-slate-400">
+              Loading workspace module…
             </div>
+          }
+        >
+          {workspace === 'qiskit' && (
+            <QiskitNotebookPanel
+              onLoadCircuitIntoStudio={(compiledSpec) => {
+                handleUpdateSpec(compiledSpec, compiledSpec.steps.length);
+                setSceneMode('bloch');
+                setWorkspace('studio');
+              }}
+            />
+          )}
 
-            {atlasQecMode === 'atlas' ? (
-              <AtlasMegascalePanel
-                onLoadCircuitIntoStudio={(compiledSpec) => {
-                  handleUpdateSpec(compiledSpec, compiledSpec.steps.length);
-                  setSceneMode('bloch');
-                  setWorkspace('studio');
-                }}
-              />
-            ) : (
-              <SurfaceCodePanel
-                distance={surfaceDistance}
-                faults={surfaceFaults}
-                activeBrush={faultBrush}
-                lastDecode={lastTropicalDecode}
-                onChangeDistance={handleChangeSurfaceDistance}
-                onSetBrush={setFaultBrush}
-                onInjectFaultAt={handleInjectFaultAt}
-                onInjectMultiFaultPreset={handleInjectMultiFaultPreset}
-                onRunTropicalDecode={handleRunTropicalDecode}
-                onApplyRecovery={handleApplyRecovery}
-                onClearLattice={() => {
-                  setSurfaceFaults(
-                    new Array<PauliFault>(surfaceDistance * surfaceDistance).fill('I'),
-                  );
-                  setLastTropicalDecode(null);
-                }}
-                onOpenIn3D={() => {
-                  setSceneMode('surface-code');
-                  setWorkspace('studio');
-                }}
-              />
-            )}
-          </div>
-        )}
+          {workspace === 'circuit' && (
+            <CircuitRollbackPanel
+              spec={spec}
+              session={validSession}
+              compileError={compileError}
+              cursor={cursor}
+              selectedWire={selectedWire}
+              onUpdateSpec={handleUpdateSpec}
+              onSetCursor={handleSetCursorWithAudio}
+              onSelectWire={handleSelectWire}
+            />
+          )}
 
-        {workspace === 'verifier' && (
-          <PrismVerifierPanel
-            spec={spec}
-            activeFrame={activeFrame}
-            activeLod={lod}
-            onSelectLod={(nextLod) => {
-              setLod(nextLod);
-              setWorkspace('studio');
-            }}
-          />
-        )}
+          {workspace === 'atlas-qec' && (
+            <div className="space-y-2">
+              <div className="max-w-[1380px] mx-auto px-6 pt-5 flex items-center justify-between gap-4">
+                <div
+                  className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-200/80 dark:bg-slate-900 border border-slate-300 dark:border-slate-800"
+                  role="tablist"
+                  aria-label="Atlas and Surface Code QEC sub-views"
+                >
+                  {(
+                    [
+                      ['atlas', 'UOR Atlas UTQC & 4,096q Megascale'],
+                      ['qec', 'Rotated Surface-Code QEC (d=3..11)'],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={atlasQecMode === id}
+                      onClick={() => setAtlasQecMode(id)}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        atlasQecMode === id
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {atlasQecMode === 'atlas' ? (
+                <AtlasMegascalePanel
+                  onLoadCircuitIntoStudio={(compiledSpec) => {
+                    handleUpdateSpec(compiledSpec, compiledSpec.steps.length);
+                    setSceneMode('bloch');
+                    setWorkspace('studio');
+                  }}
+                />
+              ) : (
+                <SurfaceCodePanel
+                  distance={surfaceDistance}
+                  faults={surfaceFaults}
+                  activeBrush={faultBrush}
+                  lastDecode={lastTropicalDecode}
+                  onChangeDistance={handleChangeSurfaceDistance}
+                  onSetBrush={setFaultBrush}
+                  onInjectFaultAt={handleInjectFaultAt}
+                  onInjectMultiFaultPreset={handleInjectMultiFaultPreset}
+                  onRunTropicalDecode={handleRunTropicalDecode}
+                  onApplyRecovery={handleApplyRecovery}
+                  onClearLattice={() => {
+                    setSurfaceFaults(
+                      new Array<PauliFault>(surfaceDistance * surfaceDistance).fill('I'),
+                    );
+                    setLastTropicalDecode(null);
+                  }}
+                  onOpenIn3D={() => {
+                    setSceneMode('surface-code');
+                    setWorkspace('studio');
+                  }}
+                />
+              )}
+            </div>
+          )}
+
+          {workspace === 'verifier' && (
+            <PrismVerifierPanel
+              spec={spec}
+              activeFrame={activeFrame}
+              activeLod={lod}
+              onSelectLod={(nextLod) => {
+                setLod(nextLod);
+                setWorkspace('studio');
+              }}
+            />
+          )}
+        </Suspense>
       </main>
     </div>
   );

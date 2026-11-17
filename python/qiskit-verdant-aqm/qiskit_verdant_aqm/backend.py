@@ -893,9 +893,11 @@ class PackedStabilizerTableau:
             self.z_cols[a] = za ^ zb
         elif op == "cz":
             a, b = qs[0], qs[1]
-            self.apply_unitary("h", (b,))
-            self.apply_unitary("cx", (a, b))
-            self.apply_unitary("h", (b,))
+            xa, za = self.x_cols[a], self.z_cols[a]
+            xb, zb = self.x_cols[b], self.z_cols[b]
+            self.r_mask ^= xa & xb & (za ^ zb)
+            self.z_cols[a] = za ^ xb
+            self.z_cols[b] = zb ^ xa
         elif op == "swap":
             a, b = qs[0], qs[1]
             self.x_cols[a], self.x_cols[b] = self.x_cols[b], self.x_cols[a]
@@ -1017,14 +1019,106 @@ class PackedStabilizerTableau:
         return self._compile_affine_internal(measured_wires, commit_first_outcome=None)
 
     def measure_z(self, wire: int, rng: random.Random) -> int:
-        """In-place single-wire projective Z collapse for mid-circuit reset/measurement paths."""
-        stab_x = self.x_cols[wire] >> self.num_qubits
+        """Zero-transpose bit-sliced Z collapse in O(n) word ops (`inv016BitSlicedStabilizerCollapseMod4`)."""
+        n = self.num_qubits
+        stab_x = self.x_cols[wire] >> n
         if stab_x != 0:
+            low_bit = stab_x & -stab_x
+            p_off = low_bit.bit_length() - 1
+            p = n + p_off
+            dst = p_off
+            p_bit = 1 << p
+            dst_bit = 1 << dst
+            elim_mask = self.x_cols[wire] & ~(p_bit | dst_bit)
+
+            if elim_mask != 0:
+                p_r = (self.r_mask >> p) & 1
+                acc_lo = 0
+                acc_hi = (self.r_mask & elim_mask) ^ (elim_mask if p_r else 0)
+                for q in range(n):
+                    xq = self.x_cols[q]
+                    zq = self.z_cols[q]
+                    x1 = (xq >> p) & 1
+                    z1 = (zq >> p) & 1
+                    if x1 == 0 and z1 == 0:
+                        continue
+                    x2 = xq & elim_mask
+                    z2 = zq & elim_mask
+                    nx2 = (~xq) & elim_mask
+                    nz2 = (~zq) & elim_mask
+                    if x1 == 1 and z1 == 1:
+                        pos = nx2 & z2
+                        neg = x2 & nz2
+                    elif x1 == 1:
+                        pos = x2 & z2
+                        neg = nx2 & z2
+                    else:
+                        pos = x2 & nz2
+                        neg = x2 & z2
+                    if pos:
+                        acc_hi ^= acc_lo & pos
+                        acc_lo ^= pos
+                    if neg:
+                        acc_hi ^= (~acc_lo) & neg
+                        acc_lo ^= neg
+                    if x1:
+                        self.x_cols[q] = xq ^ elim_mask
+                    if z1:
+                        self.z_cols[q] = zq ^ elim_mask
+                self.r_mask = (self.r_mask & ~elim_mask) | (acc_hi & elim_mask)
+
             drawn = 1 if rng.random() >= 0.5 else 0
-            self._compile_affine_internal([wire], commit_first_outcome=drawn)
+            clear_pair = ~(dst_bit | p_bit)
+            for q in range(n):
+                xq = self.x_cols[q]
+                zq = self.z_cols[q]
+                xp = (xq >> p) & 1
+                zp = (zq >> p) & 1
+                self.x_cols[q] = (xq & clear_pair) | (dst_bit if xp else 0)
+                self.z_cols[q] = (
+                    (zq & clear_pair)
+                    | (dst_bit if zp else 0)
+                    | (p_bit if q == wire else 0)
+                )
+            rp = (self.r_mask >> p) & 1
+            self.r_mask = (
+                (self.r_mask & clear_pair)
+                | (dst_bit if rp else 0)
+                | (p_bit if drawn else 0)
+            )
             return drawn
-        _, laws = self._compile_affine_internal([wire], commit_first_outcome=None)
-        return laws[wire][0]
+
+        destab_x = self.x_cols[wire] & ((1 << n) - 1)
+        if destab_x == 0:
+            return 0
+        s_mask = destab_x << n
+        phase_acc = 2 if ((self.r_mask & s_mask).bit_count() & 1) else 0
+        for q in range(n):
+            mx = self.x_cols[q] & s_mask
+            mz = self.z_cols[q] & s_mask
+            active = mx | mz
+            if active == 0:
+                continue
+            cur_x = 0
+            cur_z = 0
+            while active:
+                lb = active & -active
+                active ^= lb
+                x1 = 1 if (mx & lb) else 0
+                z1 = 1 if (mz & lb) else 0
+                if cur_x == 0 and cur_z == 0:
+                    cur_x, cur_z = x1, z1
+                else:
+                    if x1 == 1 and z1 == 1:
+                        g = cur_z - cur_x
+                    elif x1 == 1:
+                        g = cur_z * (2 * cur_x - 1)
+                    else:
+                        g = cur_x * (1 - 2 * cur_z)
+                    phase_acc += g
+                    cur_x ^= x1
+                    cur_z ^= z1
+        return 1 if (phase_acc & 3) == 2 else 0
 
 
 # ============================================================================
@@ -2136,15 +2230,27 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
 
             elif is_cyc and chosen_sub not in ("ExactSparseContinuum", "AtlasHolospace"):
                 steps, fusion_elim = _decompose_exact_gate_sequence(prefix, bindings, enable_fusion=use_fusion)
-                cyc_support, k_den, norm_exact_one = execute_sparse_cyclotomic(steps)
+                wire_to_compact: dict[int, int] = {}
+                compact_steps: list[tuple[str, tuple[int, ...]]] = []
+                for op, qs in steps:
+                    mapped_qs = []
+                    for q in qs:
+                        c_idx = wire_to_compact.get(q)
+                        if c_idx is None:
+                            c_idx = len(wire_to_compact)
+                            wire_to_compact[q] = c_idx
+                        mapped_qs.append(c_idx)
+                    compact_steps.append((op, tuple(mapped_qs)))
+                cyc_support, k_den, norm_exact_one = execute_sparse_cyclotomic(compact_steps)
                 active_kets = len(cyc_support)
                 if meas_ops and circuit.num_clbits > 0:
+                    meas_compact = [(m.clbits[0], wire_to_compact.get(m.qubits[0], -1)) for m in meas_ops]
                     for ket, amp in cyc_support.items():
                         prob = _z8_prob_scaled(amp, k_den)
                         if prob > 1e-16:
                             full_cl = [0] * circuit.num_clbits
-                            for m in meas_ops:
-                                full_cl[m.clbits[0]] = 1 if (ket & (1 << m.qubits[0])) else 0
+                            for cl_dst, c_wire in meas_compact:
+                                full_cl[cl_dst] = 1 if (c_wire >= 0 and (ket & (1 << c_wire))) else 0
                             fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
                             probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
                     sample_from_probabilities()

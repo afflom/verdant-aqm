@@ -66,12 +66,29 @@ export function isUorcArchive(bytes: Uint8Array): boolean {
 }
 
 /**
- * Lossless LZ77/RLE OrderRope byte-stream encoder matching `crates/verdant-aqm/src/uorc.rs::encode_order_rope_rle`.
+ * Lossless O(N) 4-byte hash-chained LZ77/RLE OrderRope byte-stream encoder
+ * matching `crates/verdant-aqm/src/uorc.rs::encode_order_rope_rle`.
  */
 function encodeOrderRopeRle(input: Uint8Array): Uint8Array {
   const out: number[] = [];
   const maxWin = SIXTY_FOUR * SIXTEEN; // 1024-byte sliding window
+  const winMask = maxWin - ONE;
+  const hashBuckets = maxWin * TWO; // 2048 hash buckets
+  const hashMask = hashBuckets - ONE;
+  const maxChain = THIRTY_TWO;
   const maxRun = SIXTY_FOUR + SIXTY_FOUR - ONE; // 127-byte run ceiling
+
+  const head = new Int32Array(hashBuckets).fill(-ONE);
+  const prev = new Int32Array(maxWin).fill(-ONE);
+
+  const hash4 = (p: number): number =>
+    (((input[p] << TEN) ^
+      (input[p + ONE] << SIX) ^
+      (input[p + TWO] << THREE) ^
+      input[p + THREE] ^
+      (input[p] >>> TWO)) &
+      hashMask);
+
   let pos = ZERO;
   let litStart = ZERO;
 
@@ -81,20 +98,29 @@ function encodeOrderRopeRle(input: Uint8Array): Uint8Array {
     let bestLen = ZERO;
 
     if (pos + FOUR <= input.byteLength) {
-      for (let cand = winStart; cand < pos; cand += ONE) {
-        let mlen = ZERO;
-        while (
-          pos + mlen < input.byteLength &&
-          mlen < maxRun &&
-          input[cand + mlen] === input[pos + mlen]
-        ) {
-          mlen += ONE;
+      const h = hash4(pos);
+      let cand = head[h];
+      let steps = ZERO;
+      const maxMatch = Math.min(maxRun, input.byteLength - pos);
+
+      while (cand >= winStart && steps < maxChain) {
+        if (input[cand + bestLen] === input[pos + bestLen] && input[cand] === input[pos]) {
+          let mlen = ZERO;
+          while (mlen < maxMatch && input[cand + mlen] === input[pos + mlen]) {
+            mlen += ONE;
+          }
+          if (mlen >= FOUR && mlen > bestLen) {
+            bestLen = mlen;
+            bestOff = pos - cand;
+            if (bestLen === maxMatch) break;
+          }
         }
-        if (mlen >= FOUR && mlen > bestLen) {
-          bestLen = mlen;
-          bestOff = pos - cand;
-        }
+        cand = prev[cand & winMask];
+        steps += ONE;
       }
+
+      prev[pos & winMask] = head[h];
+      head[h] = pos;
     }
 
     if (bestLen >= FOUR) {
@@ -107,7 +133,13 @@ function encodeOrderRopeRle(input: Uint8Array): Uint8Array {
         litStart += chunk;
       }
       out.push(ONE, bestOff & 0xff, (bestOff >>> EIGHT) & 0xff, bestLen & 0xff);
-      pos += bestLen;
+      const endPos = pos + bestLen;
+      for (let ins = pos + ONE; ins < endPos && ins + FOUR <= input.byteLength; ins += ONE) {
+        const ih = hash4(ins);
+        prev[ins & winMask] = head[ih];
+        head[ih] = ins;
+      }
+      pos = endPos;
       litStart = pos;
     } else {
       pos += ONE;

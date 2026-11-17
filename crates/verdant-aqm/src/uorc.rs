@@ -5,6 +5,8 @@
 //! (`ColdBootHttpAndHolo`, `CoreWasmBoundedTextVerifier`, `HostStandardInteropArtifact`).
 //! Constructed strictly from `{0, 1}` with zero magic numeric literals (`FI-08`).
 
+use std::sync::OnceLock;
+
 use crate::{CYCLOTOMIC_RANK, EIGHT, ONE, QUBIT_ARITY, SIX, THREE, ZERO};
 
 const FOUR: usize = CYCLOTOMIC_RANK;
@@ -123,22 +125,32 @@ fn first_n_primes(count: usize) -> Vec<usize> {
     out
 }
 
+static SHA256_TABLES: OnceLock<([u32; EIGHT], [u32; SIXTY_FOUR])> = OnceLock::new();
+
+fn sha256_tables() -> &'static ([u32; EIGHT], [u32; SIXTY_FOUR]) {
+    SHA256_TABLES.get_or_init(|| {
+        let primes = first_n_primes(SIXTY_FOUR);
+        let mut h0 = [0_u32; EIGHT];
+        for idx in ZERO..EIGHT {
+            let root = (primes[idx] as f64).sqrt();
+            let frac = root - root.floor();
+            h0[idx] = (frac * THIRTY_TWO_F64) as u32;
+        }
+        let mut k_consts = [0_u32; SIXTY_FOUR];
+        for idx in ZERO..SIXTY_FOUR {
+            let root = (primes[idx] as f64).cbrt();
+            let frac = root - root.floor();
+            k_consts[idx] = (frac * THIRTY_TWO_F64) as u32;
+        }
+        (h0, k_consts)
+    })
+}
+
 /// Constructive NIST FIPS 180-4 SHA-256 derived purely from the first 8 and 64 primes (`{0, 1}`).
 #[must_use]
 pub fn sha256_constructive(data: &[u8]) -> [u8; THIRTY_TWO] {
-    let primes = first_n_primes(SIXTY_FOUR);
-    let mut h = [0_u32; EIGHT];
-    for idx in ZERO..EIGHT {
-        let root = (primes[idx] as f64).sqrt();
-        let frac = root - root.floor();
-        h[idx] = (frac * THIRTY_TWO_F64) as u32;
-    }
-    let mut k_consts = [0_u32; SIXTY_FOUR];
-    for idx in ZERO..SIXTY_FOUR {
-        let root = (primes[idx] as f64).cbrt();
-        let frac = root - root.floor();
-        k_consts[idx] = (frac * THIRTY_TWO_F64) as u32;
-    }
+    let (h0, k_consts) = sha256_tables();
+    let mut h = *h0;
 
     let bit_len = (data.len() as u64) * (EIGHT as u64);
     let mut padded = data.to_vec();
@@ -308,11 +320,25 @@ pub fn verify_uorc_transport_boundary(
     }
 }
 
-/// Lossless LZ77/RLE OrderRope byte-stream coder using `[0x00, lit_len, ...]` and `[offset_lo, offset_hi, match_len]`.
+fn hash4_window(input: &[u8], pos: usize, hash_mask: usize) -> usize {
+    let b0 = input[pos] as usize;
+    let b1 = input[pos + ONE] as usize;
+    let b2 = input[pos + QUBIT_ARITY] as usize;
+    let b3 = input[pos + THREE] as usize;
+    ((b0 << TEN) ^ (b1 << SIX) ^ (b2 << THREE) ^ b3 ^ (b0 >> QUBIT_ARITY)) & hash_mask
+}
+
+/// Lossless O(N) 4-byte hash-chained LZ77/RLE OrderRope byte-stream coder using `[0x00, lit_len, ...]` and `[0x01, offset_lo, offset_hi, match_len]`.
 fn encode_order_rope_rle(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let max_win = SIXTY_FOUR * SIXTEEN;
+    let win_mask = max_win - ONE;
+    let hash_buckets = max_win * QUBIT_ARITY;
+    let hash_mask = hash_buckets - ONE;
+    let max_chain = THIRTY_TWO;
     let max_run = SIXTY_FOUR + SIXTY_FOUR - ONE;
+    let mut head: Vec<Option<usize>> = vec![None; hash_buckets];
+    let mut prev: Vec<Option<usize>> = vec![None; max_win];
     let mut pos = ZERO;
     let mut lit_start = ZERO;
 
@@ -322,21 +348,34 @@ fn encode_order_rope_rle(input: &[u8]) -> Vec<u8> {
         let mut best_len = ZERO;
 
         if pos + FOUR <= input.len() {
-            let mut cand = win_start;
-            while cand < pos {
-                let mut mlen = ZERO;
-                while pos + mlen < input.len()
-                    && mlen < max_run
-                    && input[cand + mlen] == input[pos + mlen]
-                {
-                    mlen += ONE;
+            let h = hash4_window(input, pos, hash_mask);
+            let mut cur = head[h];
+            let mut steps = ZERO;
+            let max_match = (input.len() - pos).min(max_run);
+
+            while let Some(cand) = cur {
+                if cand < win_start || steps >= max_chain {
+                    break;
                 }
-                if mlen >= FOUR && mlen > best_len {
-                    best_len = mlen;
-                    best_off = pos - cand;
+                if input[cand + best_len] == input[pos + best_len] && input[cand] == input[pos] {
+                    let mut mlen = ZERO;
+                    while mlen < max_match && input[cand + mlen] == input[pos + mlen] {
+                        mlen += ONE;
+                    }
+                    if mlen >= FOUR && mlen > best_len {
+                        best_len = mlen;
+                        best_off = pos - cand;
+                        if best_len == max_match {
+                            break;
+                        }
+                    }
                 }
-                cand += ONE;
+                cur = prev[cand & win_mask];
+                steps += ONE;
             }
+
+            prev[pos & win_mask] = head[h];
+            head[h] = Some(pos);
         }
 
         if best_len >= FOUR {
@@ -353,7 +392,16 @@ fn encode_order_rope_rle(input: &[u8]) -> Vec<u8> {
             out.push(lo);
             out.push(hi);
             out.push(best_len as u8);
-            pos += best_len;
+
+            let end_pos = pos + best_len;
+            let mut ins = pos + ONE;
+            while ins < end_pos && ins + FOUR <= input.len() {
+                let ih = hash4_window(input, ins, hash_mask);
+                prev[ins & win_mask] = head[ih];
+                head[ih] = Some(ins);
+                ins += ONE;
+            }
+            pos = end_pos;
             lit_start = pos;
         } else {
             pos += ONE;

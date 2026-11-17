@@ -941,14 +941,20 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
     };
     renderer.domElement.addEventListener('webglcontextlost', onContextLost);
 
+    let curW = initW;
+    let curH = initH;
     const resizeObserver = new ResizeObserver(() => {
       if (unmounted || !mount) return;
       const w = Math.max(320, mount.clientWidth);
       const h = Math.max(240, mount.clientHeight);
+      if (w === curW && h === curH) return;
+      curW = w;
+      curH = h;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-      requestRender();
+      controls.update();
+      renderer.render(scene, camera);
     });
     resizeObserver.observe(mount);
 
@@ -958,6 +964,8 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
 
     sceneApiRef.current = { rebuildDynamicContent, applyCameraPreset, requestRender };
     rebuildDynamicContent();
+    controls.update();
+    renderer.render(scene, camera);
 
     return () => {
       unmounted = true;
