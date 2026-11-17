@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence
+
+_NON_IDENTITY_PAULI_RE = re.compile(r"[^I]")
 
 from .backend import (
     ExactMpsTensorTrain,
@@ -127,16 +130,29 @@ def _compute_pauli_expectation_sparse(
         raise ValueError(
             f"Pauli observable '{p_str}' length ({len(p_str)}) must equal circuit num_qubits ({num_qubits})."
         )
+    wire_to_compact: dict[int, int] | None = getattr(state, "wire_to_compact", None)
     flip_mask = 0
     z_mask = 0
     y_count = 0
     # Qiskit little-endian Pauli convention: right-most char acts on q[0]!
-    for q in range(num_qubits):
-        ch = p_str[num_qubits - 1 - q]
-        bit = 1 << q
-        if ch == "I":
-            continue
-        elif ch == "X":
+    for m in _NON_IDENTITY_PAULI_RE.finditer(p_str):
+        idx = m.start()
+        ch = m.group(0)
+        q = num_qubits - 1 - idx
+        if wire_to_compact is not None:
+            c_wire = wire_to_compact.get(q)
+            if c_wire is None:
+                # Untouched wire remains in |0>: <0|X|0> = <0|Y|0> = 0, <0|Z|0> = +1
+                if ch in ("X", "Y"):
+                    return 0.0
+                if ch == "Z":
+                    continue
+                raise ValueError(f"Unsupported Pauli character '{ch}' in '{p_str}'.")
+            bit = 1 << c_wire
+        else:
+            bit = 1 << q
+
+        if ch == "X":
             flip_mask |= bit
         elif ch == "Z":
             z_mask |= bit
@@ -180,9 +196,9 @@ def _compute_pauli_expectation_clifford_adjoint(
     pz: dict[int, int] = {}
     phase_mod4 = 0  # 0:+1, 1:+i, 2:-1, 3:-i  (P = i^phase_mod4 * prod_q X^{px[q]} Z^{pz[q]})
 
-    for idx, ch in enumerate(p_str):
-        if ch == "I":
-            continue
+    for m in _NON_IDENTITY_PAULI_RE.finditer(p_str):
+        idx = m.start()
+        ch = m.group(0)
         q = num_qubits - 1 - idx
         if ch == "X":
             px[q] = 1

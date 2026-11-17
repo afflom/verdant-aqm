@@ -7,7 +7,7 @@
  *    (`app`, `model`, `crates`, `src/aqm`).
  *  - Never trusts a cached `.holo`: every restored or freshly built `VerdantAqm.holo` must pass
  *    32-byte BLAKE3 self-fingerprint verification, 356-byte `APP_MANIFEST` inspection,
- *    zero-import `wasm32` compilation, 6-export ABI check, and 32/32 `holo_run` vector replay!
+ *    zero-import `wasm32` compilation, 6-export ABI check, and 36/36 `holo_run` vector replay!
  *  - Supports OCI container registry caching on `ghcr.io/<owner>/prism-holo` in GitHub Actions,
  *    while gracefully falling through to fresh deterministic build on cache miss or offline runs.
  *
@@ -141,7 +141,7 @@ export function computeInputKappa(
  *  1. Checks 32-byte BLAKE3 self-fingerprint (`archive[0..end-32]`).
  *  2. Parses 356-byte `APP_MANIFEST` and content-addressed `CONTENT_BLOB` sections.
  *  3. Compiles embedded `wasm32` guest with zero imports and 6 required exports.
- *  4. Replays all 26 `CORE_WASM_ACCEPTANCE_VECTORS` through `holo_run(ptr, len)`.
+ *  4. Replays all 36 `CORE_WASM_ACCEPTANCE_VECTORS` through `holo_run(ptr, len)`.
  */
 export async function verifyHoloArchiveComplete(
   blob: Uint8Array,
@@ -180,7 +180,7 @@ export interface HoloIdentityRecord {
 }
 
 /**
- * Deterministically builds `VerdantAqm.holo`, verifies all 32 vectors, and writes
+ * Deterministically builds `VerdantAqm.holo`, verifies all 36 vectors, and writes
  * `<dirname(outPath)>/application/holo-identities.json` matching `verdant-engine/pages.yml`.
  */
 export async function buildAndWriteVerifiedHolo(
@@ -189,7 +189,7 @@ export async function buildAndWriteVerifiedHolo(
   cwd = process.cwd(),
 ): Promise<HoloIdentityRecord> {
   const { kappa: inputKappa } = computeInputKappa(inputs, cwd);
-  const built = buildVerdantAqmHoloArchive(`VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21:${inputKappa}`);
+  const built = buildVerdantAqmHoloArchive(`VerdantAqm@0.3.0:8-facets:AQ-01..AQ-23:${inputKappa}`);
   const verified = await verifyHoloArchiveComplete(built.archiveBytes);
 
   const absOut = resolve(cwd, outPath);

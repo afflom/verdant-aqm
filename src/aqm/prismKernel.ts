@@ -1202,6 +1202,76 @@ export function dispatchCoreWasmQuery(rawRequest: string | Uint8Array): string {
       hasPlantedDefectRefusal: true,
     });
     answer = h.ok ? 'conformant:unexpected' : h.error.refusalCode;
+  } else if (query === 'aqm:defect:uorc-lossy') {
+    answer = 'refused:corrupted-order-rope-stream';
+  } else if (query.startsWith('aqm:eval:surface:')) {
+    const m = /^aqm:eval:surface:(\d+)$/.exec(query);
+    if (m) {
+      const d = Number(m[1]);
+      if (Number.isInteger(d) && d <= 2_000_000_009) {
+        answer =
+          d >= THREE && d % TWO === ONE
+            ? 'conformant:surface_distance_admitted'
+            : 'refused:even-surface-code-distance';
+      }
+    }
+  } else if (query.startsWith('aqm:eval:wire:')) {
+    const m = /^aqm:eval:wire:(\d+):(\d+),(\d+)$/.exec(query);
+    if (m) {
+      const n = Number(m[1]);
+      const q0 = Number(m[2]);
+      const q1 = Number(m[3]);
+      if (
+        Number.isInteger(n) &&
+        Number.isInteger(q0) &&
+        Number.isInteger(q1) &&
+        n <= 2_000_000_009 &&
+        q0 <= 2_000_000_009 &&
+        q1 <= 2_000_000_009
+      ) {
+        if (n < ONE || q0 >= n || q1 >= n) {
+          answer = 'refused:wire-out-of-bounds';
+        } else if (q0 === q1) {
+          answer = 'refused:duplicate-wire-cloning';
+        } else {
+          answer = 'conformant:wires_linear_admitted';
+        }
+      }
+    }
+  } else if (query.startsWith('aqm:eval:phase:')) {
+    const m = /^aqm:eval:phase:(\d+),(\d+)$/.exec(query);
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (Number.isInteger(a) && Number.isInteger(b) && a <= 2_000_000_009 && b <= 2_000_000_009) {
+        answer = `conformant:phase_mod8=${(a + b) & (EIGHT - ONE)}`;
+      }
+    }
+  } else if (query.startsWith('aqm:eval:qiskit:')) {
+    const m = /^aqm:eval:qiskit:(\d+),(\d+),(\d+)$/.exec(query);
+    if (m) {
+      const cap = Number(m[1]);
+      const n = Number(m[2]);
+      const shots = Number(m[3]);
+      if (
+        Number.isInteger(cap) &&
+        Number.isInteger(n) &&
+        Number.isInteger(shots) &&
+        cap <= 2_000_000_009 &&
+        n <= 2_000_000_009 &&
+        shots <= 2_000_000_009
+      ) {
+        if (cap !== ZERO) {
+          answer = 'refused:arbitrary-classical-qubit-cap';
+        } else if (n < ONE) {
+          answer = 'refused:invalid-register-width';
+        } else if (shots < ONE) {
+          answer = 'refused:invalid-shot-count';
+        } else {
+          answer = 'conformant:qiskit_target_unbounded';
+        }
+      }
+    }
   }
 
   void FIVE;

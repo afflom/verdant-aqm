@@ -736,19 +736,70 @@ test('AQ-19, AQ-20 & AQ-21: Production Qiskit BackendV2, Primitives V2, Upstream
   }
   assert.equal(oracleReport.allPassed, true);
 
-  // 3. Audit Diataxis Markdown guides & generate deterministic nbformat v4.5 Jupyter notebooks
-  const guideMap: Record<string, string> = {};
+  // 3. Audit Diataxis Markdown guides, root README.md, CONFORMANCE.md, Python README.md & model/content.json
+  const guideMap: Record<string, string> = {
+    'README.md': readFileSync('README.md', 'utf8'),
+    'CONFORMANCE.md': readFileSync('CONFORMANCE.md', 'utf8'),
+    'python/qiskit-verdant-aqm/README.md': readFileSync(
+      'python/qiskit-verdant-aqm/README.md',
+      'utf8',
+    ),
+  };
   for (const g of DIATAXIS_GUIDE_META) {
     guideMap[g.path] = readFileSync(g.path, 'utf8');
   }
   const devrelAudit = runDevRelContentAndPublishGateAudit(guideMap, rawPayloads);
-  assert.equal(devrelAudit.fillerViolations.length, 0);
-  assert.equal(devrelAudit.vagueLinkViolations.length, 0);
+  assert.equal(
+    devrelAudit.fillerViolations.length,
+    0,
+    `CS-10 filler violations: ${JSON.stringify(devrelAudit.fillerViolations)}`,
+  );
+  assert.equal(
+    devrelAudit.vagueLinkViolations.length,
+    0,
+    `CS-09 vague link violations: ${JSON.stringify(devrelAudit.vagueLinkViolations)}`,
+  );
   assert.equal(devrelAudit.uncoveredCapabilities.length, 0);
   assert.equal(devrelAudit.coveredCapabilities.length, 23);
   assert.equal(devrelAudit.unverifiedNotebooks, 0);
   assert.equal(devrelAudit.gateVerdict, 'publish');
   assert.equal(devrelAudit.gateOk, true);
+
+  // Verify root README.md CS-01/CS-04/CS-05/CS-08 structure, Apache-2.0 LICENSE, and model/content.json (prism/content/1)
+  const rootReadme = guideMap['README.md'];
+  const firstH2Idx = rootReadme.indexOf('\n## ');
+  assert.ok(firstH2Idx > 0, 'README.md must have h2 sections');
+  const readmeLead = rootReadme.slice(0, firstH2Idx);
+  assert.ok(readmeLead.includes('Reader guide'), 'CS-01: README.md must open with reader persona guide');
+  assert.ok(readmeLead.includes('```') && readmeLead.includes('*Figure 1:'), 'CS-04/CS-05: README.md must show a captioned figure before first h2');
+  assert.ok(readmeLead.includes('| Execution Substrate |'), 'CS-05: README.md figure must include structured data table before first h2');
+  const h1Count = rootReadme
+    .replace(/```[\s\S]*?```/g, '')
+    .split('\n')
+    .filter((l) => /^#\s+/.test(l)).length;
+  assert.equal(h1Count, 1, 'CS-08: README.md must have exactly one h1 heading');
+
+  const rootLicense = readFileSync('LICENSE', 'utf8');
+  assert.ok(rootLicense.includes('Apache License') && rootLicense.includes('Version 2.0, January 2004'));
+
+  const contentModel = JSON.parse(readFileSync('model/content.json', 'utf8')) as {
+    spec: string;
+    personas: Array<{ id: string; stakeholder: string }>;
+  };
+  assert.equal(contentModel.spec, 'prism/content/1');
+  assert.deepEqual(
+    contentModel.personas.map((p) => p.id).sort(),
+    ['iris', 'kai', 'otto', 'vera', 'wren'],
+  );
+  const archLex = readFileSync('app/src/Architecture.lex.tex', 'utf8');
+  const stakeholderBlock = archLex.match(/name:\s*Stakeholder[\s\S]*?\n\}/)?.[0] ?? '';
+  const archStakeholders = Array.from(stakeholderBlock.matchAll(/\{name:\s*([A-Za-z0-9_]+)/g), (m) => m[1]).sort();
+  assert.equal(archStakeholders.length, 5);
+  assert.deepEqual(
+    contentModel.personas.map((p) => p.stakeholder).sort(),
+    archStakeholders,
+    'Every Stakeholder in Architecture.lex.tex must have an exact 1-to-1 persona in model/content.json',
+  );
 
   // Verify devrel-publish-gate decision totality (publish vs regenerate vs refuse)
   assert.equal(
@@ -1151,6 +1202,111 @@ test('Zero-limits Prism & Qiskit refinement: 64q 2^64-ket ExactMps, 512q mid-cir
   assert.ok(tUorcElapsed < 150, `Expected 64 KiB UORC round-trip < 150ms, got ${tUorcElapsed.toFixed(1)}ms`);
 });
 
+test('Zero-stubs completion: native wasm32 dynamic aqm:eval:* queries, Wasm-backed parametric SLM, 1M-qubit ExactSparseContinuum compaction, u2 & full notebook Python features', async () => {
+  const { assembleCoreWasmGuestBinary, instantiateHoloCoreWasmGuest, runHoloCoreWasmGuest } = await import('./holoGuest');
+  const { dispatchCoreWasmQuery } = await import('./prismKernel');
+  const { routePromptWithCodedSlm } = await import('./slm');
+  const {
+    QuantumCircuitBuilder,
+    VerdantAqmBackend,
+    VerdantAqmEstimatorV2,
+    executeQiskitNotebookCell,
+  } = await import('./qiskitBackend');
 
+  // 1. Native zero-import wasm32 holo_run dynamic parameterized evaluators + planted defects match dispatchCoreWasmQuery
+  const guest = await instantiateHoloCoreWasmGuest(assembleCoreWasmGuestBinary());
+  const dynamicQueries = [
+    'aqm:defect:illegal-commute',
+    'aqm:defect:uorc-lossy',
+    'aqm:eval:surface:7',
+    'aqm:eval:surface:6',
+    'aqm:eval:surface:1',
+    'aqm:eval:wire:128:0,127',
+    'aqm:eval:wire:128:64,64',
+    'aqm:eval:wire:16:0,16',
+    'aqm:eval:phase:5,7',
+    'aqm:eval:phase:3,5',
+    'aqm:eval:qiskit:0,1000000,1024',
+    'aqm:eval:qiskit:29,128,1024',
+    'aqm:eval:qiskit:0,0,1024',
+    'aqm:eval:qiskit:0,64,0',
+  ];
+  for (const q of dynamicQueries) {
+    const wasmOut = runHoloCoreWasmGuest(guest, q);
+    const kernelOut = dispatchCoreWasmQuery(q);
+    assert.equal(wasmOut, kernelOut, `Wasm vs kernel mismatch on '${q}': '${wasmOut}' !== '${kernelOut}'`);
+  }
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:surface:7'), 'conformant:surface_distance_admitted');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:surface:6'), 'refused:even-surface-code-distance');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:wire:128:0,127'), 'conformant:wires_linear_admitted');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:wire:128:64,64'), 'refused:duplicate-wire-cloning');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:phase:5,7'), 'conformant:phase_mod8=4');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:qiskit:0,1000000,1024'), 'conformant:qiskit_target_unbounded');
+  assert.equal(runHoloCoreWasmGuest(guest, 'aqm:eval:qiskit:29,128,1024'), 'refused:arbitrary-classical-qubit-cap');
 
+  // 2. Wasm-backed Coded SLM synthesizes arbitrary-width circuits and refuses custom wire violations
+  const slm128 = routePromptWithCodedSlm('synthesize a 128-qubit sparse cat state');
+  assert.equal(slm128.admitted, true);
+  assert.equal(slm128.proposedSpec.qubitCount, 128);
+  assert.ok(slm128.codedGemmScore > 0);
 
+  const slm48Mps = routePromptWithCodedSlm('build a 48-qubit exact mps cluster cascade');
+  assert.equal(slm48Mps.admitted, true);
+  assert.equal(slm48Mps.proposedSpec.qubitCount, 48);
+
+  const slmClone = routePromptWithCodedSlm('clone q7 onto q7 on 16 qubits');
+  assert.equal(slmClone.admitted, false);
+  assert.equal(slmClone.refusalError?.kind, 'QuantumIsaError::DuplicateWireReference');
+
+  const slmOob = routePromptWithCodedSlm('apply h on q16 with 8 qubits');
+  assert.equal(slmOob.admitted, false);
+  assert.equal(slmOob.refusalError?.kind, 'QuantumIsaError::InvalidQubitIndex');
+
+  // 3. 1,000,000-qubit ExactSparseContinuum active-wire compaction + EstimatorV2 + u2 gate
+  const n1m = 1_000_000;
+  const t1m0 = performance.now();
+  const qc1mCont = new QuantumCircuitBuilder(n1m, 2, 'sparse_cont_1M_q')
+    .ry(0.7, 0)
+    .cx(0, n1m - 1)
+    .rzz(0.3, 0, n1m - 1);
+  const qc1mUnmeas = qc1mCont.build();
+  const est = new VerdantAqmEstimatorV2({ defaultPrecision: 0 });
+  const zz1m = `Z${'I'.repeat(n1m - 2)}Z`;
+  const zMid1m = `${'I'.repeat(499_999)}Z${'I'.repeat(500_000)}`;
+  const xMid1m = `${'I'.repeat(499_999)}X${'I'.repeat(500_000)}`;
+  const pub1m = est.run([[qc1mUnmeas, [zz1m, zMid1m, xMid1m]]]).result()[0];
+  const dt1m = performance.now() - t1m0;
+  assert.equal(pub1m.metadata.substrate, 'ExactSparseContinuum');
+  const ev1m = pub1m.data.evs as number[];
+  assert.ok(Math.abs(ev1m[0] - 1.0) < 1e-12);
+  assert.ok(Math.abs(ev1m[1] - 1.0) < 1e-12);
+  assert.equal(ev1m[2], 0);
+  assert.ok(dt1m < 250, `Expected 1M-qubit ExactSparseContinuum EstimatorV2 < 250ms, got ${dt1m.toFixed(1)}ms`);
+
+  const qcU2 = new QuantumCircuitBuilder(1, 1, 'u2_hadamard').u2(0, Math.PI, 0).h(0).measure(0, 0).build();
+  const resU2 = new VerdantAqmBackend({ shots: 64, seed_simulator: 9 }).run(qcU2).result();
+  assert.deepEqual(resU2.get_counts(), { '0': 64 });
+
+  // 4. executeQiskitNotebookCell nested loops, provider, transpile, weave_atlas=True, and UORC round-trip
+  const nbAdv = executeQiskitNotebookCell(
+    [
+      'from qiskit import QuantumCircuit, transpile',
+      'from qiskit_verdant_aqm import VerdantAqmProvider',
+      'provider = VerdantAqmProvider()',
+      'backend = provider.get_backend("verdant_aqm_prism")',
+      'qc = QuantumCircuit(4, 4, name="nested_weave")',
+      'qc.ry(0.42, 0)',
+      'for layer in range(2):',
+      '    for q in range(3):',
+      '        qc.cx(q, q + 1)',
+      'qc.measure([0, 1, 2, 3], [0, 1, 2, 3])',
+      'tqc = transpile(qc, backend=backend)',
+      'res = backend.run(tqc, shots=64, weave_atlas=True).result()',
+      'raw_uorc = res.to_uorc_bytes()',
+      'restored = res.from_uorc_bytes(raw_uorc)',
+    ].join('\n'),
+  );
+  assert.equal(nbAdv.ok, true, nbAdv.error);
+  assert.ok(nbAdv.stdoutLines.some((l) => l.includes('SkWeaver PU(22) max projective residual')));
+  assert.ok(nbAdv.stdoutLines.some((l) => l.includes('UORC lossless custody round-trip')));
+});

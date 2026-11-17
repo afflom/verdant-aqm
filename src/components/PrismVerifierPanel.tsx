@@ -678,21 +678,28 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               </div>
 
               <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-                {CORE_WASM_ACCEPTANCE_VECTORS.map((vec) => (
+                {[
+                  'aqm:eval:wire:128:0,127',
+                  'aqm:eval:wire:128:64,64',
+                  'aqm:eval:surface:7',
+                  'aqm:eval:phase:5,7',
+                  'aqm:eval:qiskit:0,1000000,1024',
+                  ...CORE_WASM_ACCEPTANCE_VECTORS.map((v) => v.request),
+                ].map((reqStr) => (
                   <button
-                    key={vec.request}
+                    key={reqStr}
                     type="button"
                     onClick={() => {
-                      setQueryInput(vec.request);
+                      setQueryInput(reqStr);
                       callVerifierWorker(
-                        { kind: 'dispatch', request: vec.request },
-                        () => dispatchCoreWasmQuery(vec.request),
+                        { kind: 'dispatch', request: reqStr },
+                        () => dispatchCoreWasmQuery(reqStr),
                         (res) => setQueryOutput(res),
                       );
                     }}
                     className="px-2.5 py-1 rounded text-xs font-mono bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-emerald-500 whitespace-nowrap"
                   >
-                    {vec.request}
+                    {reqStr}
                   </button>
                 ))}
               </div>

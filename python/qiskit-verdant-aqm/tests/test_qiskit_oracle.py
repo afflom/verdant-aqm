@@ -491,8 +491,131 @@ class TestAuthoritativeQiskitOracle(unittest.TestCase):
         self.assertLess(len(wire_64k), len(buf_64k))
         self.assertLess(dt_uorc, 0.20, f"Expected 64 KiB UORC round-trip < 0.20s, took {dt_uorc:.3f}s")
 
+    def test_20_atlas_utqc_mtc_axioms_sk_weaver_and_holospace(self) -> None:
+        from qiskit_verdant_aqm import (
+            CANONICAL_ATLAS_PARAMS,
+            execute_atlas_holospace_batch,
+            verify_atlas_mtc_axioms,
+            weave_qasm_with_sk_weaver,
+        )
+
+        self.assertEqual(CANONICAL_ATLAS_PARAMS.rank(), 96)
+        mtc = verify_atlas_mtc_axioms()
+        self.assertTrue(mtc.ok)
+        self.assertEqual(mtc.rank, 24)
+        self.assertLess(mtc.max_residual, 1e-10)
+
+        qasm_rot = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        rz(0.37) q[0];
+        rx(0.61) q[1];
+        ry(0.29) q[0];
+        """
+        woven = weave_qasm_with_sk_weaver(qasm_rot, carrier="Certified22", epsilon_target=1e-4)
+        self.assertEqual(len(woven.segments), 3)
+        self.assertLess(woven.max_projective_residual, 1e-3)
+        self.assertGreaterEqual(woven.unique_prefix_kappas, 2)
+
+        batch = execute_atlas_holospace_batch(4, [("h", (0,)), ("t", (0,)), ("cx", (0, 1)), ("h", (0,)), ("t", (0,))])
+        self.assertEqual(batch.carrier_bytes, 768)
+        self.assertTrue(batch.final_kappa.startswith("blake3:"))
+        self.assertGreaterEqual(batch.unique_kappas, 2)
+
+        qc_weave = QuantumCircuit(2, 2, name="atlas_weave_bell")
+        qc_weave.ry(0.51, 0).cx(0, 1).rz(0.33, 1).measure([0, 1], [0, 1])
+        res_weave = VerdantAqmBackend(shots=64, seed_simulator=42).run(
+            qc_weave, weave_atlas=True, substrate="AtlasHolospace"
+        ).result()
+        meta = res_weave.results[0].metadata
+        self.assertEqual(meta["substrate"], "AtlasHolospace")
+        self.assertIn("sk_weaver_max_residual", meta)
+        self.assertLess(meta["sk_weaver_max_residual"], 1e-3)
+        self.assertGreaterEqual(meta["atlas_unique_kappas"], 1)
+
+        qc_cyc_holo = QuantumCircuit(2, 2, name="atlas_cyc_holo")
+        qc_cyc_holo.h(0).t(0).cx(0, 1).measure([0, 1], [0, 1])
+        res_cyc_holo = VerdantAqmBackend(shots=64, seed_simulator=42).run(
+            qc_cyc_holo, substrate="AtlasHolospace"
+        ).result()
+        meta_cyc = res_cyc_holo.results[0].metadata
+        self.assertEqual(meta_cyc["atlas_carrier_bytes"], 768)
+        self.assertGreaterEqual(meta_cyc["atlas_unique_kappas"], 2)
+
+    def test_21_1m_qubit_sparse_continuum_compaction_and_u2(self) -> None:
+        import time
+
+        n_1m = 1_000_000
+        t0 = time.perf_counter()
+        qc_1m = QuantumCircuit(n_1m, name="sparse_cont_1M_q")
+        qc_1m.ry(0.7, 0).cx(0, n_1m - 1).rzz(0.3, 0, n_1m - 1)
+        zz_1m = "Z" + ("I" * (n_1m - 2)) + "Z"
+        z_mid = ("I" * 499_999) + "Z" + ("I" * 500_000)
+        x_mid = ("I" * 499_999) + "X" + ("I" * 500_000)
+
+        est = VerdantAqmEstimatorV2(default_precision=0.0)
+        pub = est.run([(qc_1m, [zz_1m, z_mid, x_mid])]).result()[0]
+        dt = time.perf_counter() - t0
+        self.assertEqual(pub.metadata["substrate"], "ExactSparseContinuum")
+        self.assertAlmostEqual(pub.data.evs[0], 1.0, places=12)
+        self.assertAlmostEqual(pub.data.evs[1], 1.0, places=12)
+        self.assertEqual(pub.data.evs[2], 0.0)
+        self.assertLess(dt, 0.25, f"Expected 1M-qubit ExactSparseContinuum EstimatorV2 < 0.25s, took {dt:.3f}s")
+
+        # Also verify 1M-qubit BackendV2 run with terminal measurement on compacted wires + u2(0, pi) == H
+        qc_1m_meas = QuantumCircuit(n_1m, 2, name="sparse_cont_1M_meas")
+        qc_1m_meas.u2(0.0, math.pi, 0).cx(0, n_1m - 1).measure([0, n_1m - 1], [0, 1])
+        res_1m_meas = VerdantAqmBackend(shots=64, seed_simulator=17).run(qc_1m_meas).result()
+        self.assertEqual(res_1m_meas.results[0].metadata["substrate"], "ExactSparseContinuum")
+        probs = res_1m_meas.results[0].data.probabilities
+        self.assertAlmostEqual(probs.get("00", 0.0), 0.5, places=12)
+        self.assertAlmostEqual(probs.get("11", 0.0), 0.5, places=12)
+
+    def test_22_python_holo_wasm_guest_runtime_execution(self) -> None:
+        from qiskit_verdant_aqm import instantiate_holo_wasm_guest
+
+        holo_path = REPO_ROOT / "dist" / "app.holo"
+        if not holo_path.exists():
+            return
+        guest = instantiate_holo_wasm_guest(holo_path)
+        self.assertEqual(len(guest.exported_symbols), 6)
+
+        # Static + planted defect + dynamic parameterized wasm32 evaluators
+        self.assertEqual(
+            guest.holo_run("aqm:wasm:kernels"),
+            "conformant:exports=6,i64_popcnt=true,packed4_gemv=true,tropical_k7=true",
+        )
+        self.assertEqual(guest.holo_run("unknown-probe"), "invalid request")
+        self.assertEqual(guest.holo_run("aqm:defect:illegal-commute"), "refused:illegal-noncommuting-push")
+        self.assertEqual(guest.holo_run("aqm:defect:uorc-lossy"), "refused:corrupted-order-rope-stream")
+        self.assertEqual(guest.holo_run("aqm:eval:surface:7"), "conformant:surface_distance_admitted")
+        self.assertEqual(guest.holo_run("aqm:eval:surface:6"), "refused:even-surface-code-distance")
+        self.assertEqual(guest.holo_run("aqm:eval:wire:128:0,127"), "conformant:wires_linear_admitted")
+        self.assertEqual(guest.holo_run("aqm:eval:wire:128:64,64"), "refused:duplicate-wire-cloning")
+        self.assertEqual(guest.holo_run("aqm:eval:phase:5,7"), "conformant:phase_mod8=4")
+        self.assertEqual(guest.holo_run("aqm:eval:qiskit:0,1000000,1024"), "conformant:qiskit_target_unbounded")
+        self.assertEqual(guest.holo_run("aqm:eval:qiskit:29,128,1024"), "refused:arbitrary-classical-qubit-cap")
+
+        # Native Wasm exported numeric kernels
+        self.assertFalse(guest.symplectic_commute([1], [0], [0], [1]))  # X and Z anticommute
+        self.assertTrue(guest.symplectic_commute([3], [0], [0], [3]))   # XX and ZZ commute
+
+        grid16 = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8]
+        scores, ops = guest.coded_packed4_gemv([2, 3], bytes([(3 << 4) | 1]), grid16, 1, 1)
+        self.assertEqual(scores, [2 * 1 + 3 * 2])
+        self.assertEqual(ops, 2)
+
+        INF = 0x3FFFFFFF
+        dist_out, hop_out, relaxes = guest.tropical_minplus_closure(
+            [0, 10, INF, INF, 0, 5, INF, INF, 0],
+            [0, 1, -1, -1, 1, 2, -1, -1, 2],
+            3,
+        )
+        self.assertEqual(dist_out[2], 15)
+        self.assertEqual(hop_out[2], 1)
+        self.assertGreaterEqual(relaxes, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-

@@ -1,7 +1,9 @@
 {
-  "name": "react-example",
+  "name": "verdant-aqm",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.3.0",
+  "description": "Prism-verified Abstract Quantum Machine and unbounded Qiskit BackendV2 + Primitives V2 runtime over sparse cyclotomic rings, Galois-RREF MPS, column bit-plane stabilizer tableaus, UOR Atlas topological braids, and pure UORC wire containers.",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -12,9 +14,9 @@
     "ratchet": "tsx bootstrap/ratchet-gate.ts",
     "kappa:key": "tsx ci/kappa-cache.ts key",
     "test": "tsx --test src/aqm/aqm.test.ts",
-    "test:python": "python3 -m unittest discover -s python/qiskit-verdant-aqm/tests -v",
+    "test:python": "python3 -B -m unittest discover -s python/qiskit-verdant-aqm/tests -v",
     "preview": "vite preview",
-    "clean": "rm -rf dist .prism server.js",
+    "clean": "rm -rf dist .prism .playwright-cli server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

@@ -388,6 +388,9 @@ export class QuantumCircuitBuilder {
   public ry(theta: QiskitParamExpr, q: number): this { return this.append('ry', [q], undefined, [theta]); }
   public rz(theta: QiskitParamExpr, q: number): this { return this.append('rz', [q], undefined, [theta]); }
   public p(lam: QiskitParamExpr, q: number): this { return this.append('p', [q], undefined, [lam]); }
+  public u2(phi: QiskitParamExpr, lam: QiskitParamExpr, q: number): this {
+    return this.append('u2', [q], undefined, [phi, lam]);
+  }
   public u(theta: QiskitParamExpr, phi: QiskitParamExpr, lam: QiskitParamExpr, q: number): this {
     return this.append('u', [q], undefined, [theta, phi, lam]);
   }
@@ -1252,13 +1255,45 @@ function measureOrResetSparseKet(
 }
 
 /**
+ * Remaps active non-barrier qubit wires onto contiguous compact indices `0 .. K-1`
+ * so `1,000,000+`-qubit sparse states never allocate multi-kilobyte `1n << 999999n` BigInt masks!
+ */
+function compactQiskitInstructions(instructions: readonly QiskitInstruction[]): {
+  compactInstructions: QiskitInstruction[];
+  wireToCompact: Map<number, number>;
+} {
+  const wireToCompact = new Map<number, number>();
+  const mapWire = (q: number): number => {
+    let c = wireToCompact.get(q);
+    if (c === undefined) {
+      c = wireToCompact.size;
+      wireToCompact.set(q, c);
+    }
+    return c;
+  };
+  const compactInstructions: QiskitInstruction[] = [];
+  for (const inst of instructions) {
+    const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
+    if (canon === 'barrier' || canon === 'id') continue;
+    compactInstructions.push({
+      ...inst,
+      qubits: inst.qubits.map(mapWire),
+    });
+  }
+  return { compactInstructions, wireToCompact };
+}
+
+/**
  * Computes exact multi-qubit Pauli string expectation `<psi | P | psi>` on a `SparseComplexMap`
  * using Qiskit's little-endian Pauli convention: `pauliStr[n - 1 - q]` acts on qubit `q`!
+ * When `wireToCompact` is provided, untouched wires in `|0>` never shift `BigInt` masks and
+ * any `'X'` or `'Y'` on an untouched `|0>` wire short-circuits to `0` in O(1)!
  */
 export function computeExactPauliExpectationSparse(
   state: SparseComplexMap,
   numQubits: number,
   pauliStr: string,
+  wireToCompact?: ReadonlyMap<number, number> | null,
 ): number {
   const clean = pauliStr.trim().toUpperCase();
   if (clean.length !== numQubits) {
@@ -1272,15 +1307,22 @@ export function computeExactPauliExpectationSparse(
   const yWires: bigint[] = [];
   for (let q = 0; q < numQubits; q += 1) {
     const ch = clean[numQubits - 1 - q];
-    const bit = 1n << BigInt(q);
     if (ch === 'I') continue;
-    else if (ch === 'X') flipMask |= bit;
+    if (ch !== 'X' && ch !== 'Y' && ch !== 'Z') {
+      throw new Error(`Invalid Pauli character '${ch}' in '${pauliStr}'`);
+    }
+    const mappedWire = wireToCompact ? wireToCompact.get(q) : q;
+    if (mappedWire === undefined) {
+      // Untouched wire is identically in |0>: <0|X|0> = 0, <0|Y|0> = 0, <0|Z|0> = +1
+      if (ch === 'X' || ch === 'Y') return 0;
+      continue;
+    }
+    const bit = 1n << BigInt(mappedWire);
+    if (ch === 'X') flipMask |= bit;
     else if (ch === 'Z') zWires.push(bit);
-    else if (ch === 'Y') {
+    else {
       flipMask |= bit;
       yWires.push(bit);
-    } else {
-      throw new Error(`Invalid Pauli character '${ch}' in '${pauliStr}'`);
     }
   }
 
@@ -1349,10 +1391,11 @@ function cyclotomicToSparseComplex(cycState: ReturnType<typeof executeCyclotomic
   return out;
 }
 
-/** Computes exact `<psi | P | psi> in {-1, 0, +1}` directly from a Gottesman-Knill `SymplecticTableau` in O(n^2/64) */
+/** Computes exact `<psi | P | psi> in {-1, 0, +1}` directly via O(|gates|) Heisenberg adjoint Pauli conjugation */
 function computeStabilizerPauliExpectation(
   circuit: QiskitCircuitDefinition,
   pauliStr: string,
+  bindings: Readonly<Record<string, number>> = {},
 ): number | null {
   const clean = pauliStr.trim().toUpperCase();
   if (clean.length !== circuit.numQubits) {
@@ -1360,7 +1403,7 @@ function computeStabilizerPauliExpectation(
       `QiskitBackendError::MalformedPauliObservableArity: Pauli string '${pauliStr}' length ${clean.length} != num_qubits ${circuit.numQubits}.`,
     );
   }
-  const steps = decomposeExactQiskitUnitaryPrefix(circuit.instructions, {});
+  const steps = decomposeExactQiskitUnitaryPrefix(circuit.instructions, bindings);
   // Measure expectation of Pauli string by conjugating P -> U^\dagger P U into computational basis via adjoint Clifford!
   // Wait: conjugating P through the inverse Clifford circuit `steps.reverse()` maps `<0| U^\dagger P U |0>` to `<0| P' |0>`:
   //   - If P' has ANY X or Y component on ANY qubit, `<0| P' |0> = 0`!
@@ -1756,6 +1799,7 @@ export class VerdantAqmBackend {
   ): {
     substrate: VerdantQiskitSubstrate;
     sparseState: SparseComplexMap | null;
+    wireToCompact: ReadonlyMap<number, number> | null;
     mpsState: ExactMpsState | null;
     circuit: QiskitCircuitDefinition;
     fusionEliminated: number;
@@ -1781,6 +1825,7 @@ export class VerdantAqmBackend {
       return {
         substrate: 'StabilizerTableau',
         sparseState: null,
+        wireToCompact: null,
         mpsState: null,
         circuit: { ...circuit, instructions: unitaryInstructions },
         fusionEliminated: 0,
@@ -1802,6 +1847,7 @@ export class VerdantAqmBackend {
       return {
         substrate: 'ExactMps',
         sparseState: null,
+        wireToCompact: null,
         mpsState: mps,
         circuit,
         fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
@@ -1819,23 +1865,38 @@ export class VerdantAqmBackend {
         steps: rawSteps,
       });
       const execSteps = fused.ok ? fused.optimizedSpec.steps : rawSteps;
-      const cyc = executeCyclotomicBatch(circuit.numQubits, execSteps);
+      const wireToCompact = new Map<number, number>();
+      const compactSteps: AqmGateStep[] = execSteps.map((st) => ({
+        ...st,
+        targets: st.targets.map((q) => {
+          let cIdx = wireToCompact.get(q);
+          if (cIdx === undefined) {
+            cIdx = wireToCompact.size;
+            wireToCompact.set(q, cIdx);
+          }
+          return cIdx;
+        }),
+      }));
+      const cyc = executeCyclotomicBatch(Math.max(1, wireToCompact.size), compactSteps);
       return {
         substrate: 'CyclotomicExact',
         sparseState: cyclotomicToSparseComplex(cyc),
+        wireToCompact,
         mpsState: null,
         circuit,
         fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
       };
     }
 
+    const { compactInstructions, wireToCompact } = compactQiskitInstructions(unitaryInstructions);
     let sparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
-    for (const inst of unitaryInstructions) {
+    for (const inst of compactInstructions) {
       sparse = applyQiskitUnitaryInstructionSparse(sparse, inst, bindings);
     }
     return {
       substrate: chosenSubstrate === 'AtlasHolospace' ? 'AtlasHolospace' : 'ExactSparseContinuum',
       sparseState: sparse,
+      wireToCompact,
       mpsState: null,
       circuit,
       fusionEliminated: 0,
@@ -2172,9 +2233,16 @@ export class VerdantAqmBackend {
           sampleFromOutcomeProbabilities();
         }
       } else {
-        // Exact Sparse Continuum / AtlasHolospace unitary prefix + O(log M) binary-search sampling
+        // Exact Sparse Continuum / AtlasHolospace unitary prefix with active-wire compaction + O(log M) binary-search sampling
+        const { compactInstructions, wireToCompact } = compactQiskitInstructions(prefixInstructions);
+        const measCompact = measureOps.map((mOp) => ({
+          clbit: mOp.clbits![0],
+          cBitMask: wireToCompact.has(mOp.qubits[0])
+            ? 1n << BigInt(wireToCompact.get(mOp.qubits[0])!)
+            : 0n,
+        }));
         let sparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
-        for (const inst of prefixInstructions) {
+        for (const inst of compactInstructions) {
           sparse = applyQiskitUnitaryInstructionSparse(sparse, inst, bindings);
         }
         activeKets = sparse.size;
@@ -2182,10 +2250,10 @@ export class VerdantAqmBackend {
         for (const [ket, [r, im]] of sparse) {
           const prob = r * r + im * im;
           mass += prob;
-          if (prob > 1e-16 && measureOps.length > 0 && circuit.numClbits > 0) {
+          if (prob > 1e-16 && measCompact.length > 0 && circuit.numClbits > 0) {
             const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-            for (const mOp of measureOps) {
-              clbits[mOp.clbits![0]] = (ket & (1n << BigInt(mOp.qubits[0]))) !== 0n ? 1 : 0;
+            for (const mc of measCompact) {
+              clbits[mc.clbit] = mc.cBitMask !== 0n && (ket & mc.cBitMask) !== 0n ? 1 : 0;
             }
             const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
             probabilities[fmt] = (probabilities[fmt] ?? 0) + prob;
@@ -2193,7 +2261,7 @@ export class VerdantAqmBackend {
         }
         normExactOne = Math.abs(mass - 1) < 1e-11;
 
-        if (measureOps.length > 0 && circuit.numClbits > 0) {
+        if (measCompact.length > 0 && circuit.numClbits > 0) {
           sampleFromOutcomeProbabilities();
         }
       }
@@ -2272,15 +2340,37 @@ export class VerdantAqmBackend {
         probabilities[k] = cnt / cfg.shots;
       }
     } else {
-      // General dynamic mid-circuit measurement & reset shot-trajectory execution with cached deterministic prefix!
-      let baseSparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
+      // General dynamic mid-circuit measurement & reset shot-trajectory execution with active-wire compaction & cached prefix!
+      const wireToCompact = new Map<number, number>();
+      const mapWire = (q: number): number => {
+        let c = wireToCompact.get(q);
+        if (c === undefined) {
+          c = wireToCompact.size;
+          wireToCompact.set(q, c);
+        }
+        return c;
+      };
+      const compactPrefix: QiskitInstruction[] = [];
       for (const inst of circuit.instructions.slice(0, firstNonUnitaryIdx)) {
+        const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
+        if (canon === 'barrier' || canon === 'id') continue;
+        compactPrefix.push({ ...inst, qubits: inst.qubits.map(mapWire) });
+      }
+      const compactTail: QiskitInstruction[] = [];
+      for (const inst of tailInstructions) {
+        const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
+        if (canon === 'barrier' || canon === 'id') continue;
+        compactTail.push({ ...inst, qubits: inst.qubits.map(mapWire) });
+      }
+
+      let baseSparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
+      for (const inst of compactPrefix) {
         baseSparse = applyQiskitUnitaryInstructionSparse(baseSparse, inst, bindings);
       }
       for (let s = 0; s < cfg.shots; s += 1) {
         let sparse: SparseComplexMap = new Map(baseSparse);
         const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
-        for (const inst of tailInstructions) {
+        for (const inst of compactTail) {
           const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
           if (canon === 'measure') {
             const m = measureOrResetSparseKet(sparse, inst.qubits[0], rng(), false);
@@ -2597,7 +2687,7 @@ export class VerdantAqmEstimatorV2 {
             if (stateEval.mpsState !== null) {
               termExp = computeExactMpsPauliExpectation(stateEval.mpsState, pauliStr);
             } else if (stateEval.sparseState === null) {
-              const stabExp = computeStabilizerPauliExpectation(stateEval.circuit, pauliStr);
+              const stabExp = computeStabilizerPauliExpectation(stateEval.circuit, pauliStr, bindMap);
               if (stabExp === null) {
                 throw new Error(`Invalid Pauli string '${pauliStr}' for StabilizerTableau expectation`);
               }
@@ -2607,6 +2697,7 @@ export class VerdantAqmEstimatorV2 {
                 stateEval.sparseState,
                 circuit.numQubits,
                 pauliStr,
+                stateEval.wireToCompact,
               );
             }
             exactEv += coeff * termExp;
@@ -2762,70 +2853,112 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       };
     }
 
-    // Parse & execute Qiskit Python subset (`QuantumCircuit`, `range` loops, `VerdantAqmBackend`, `SamplerV2`, `EstimatorV2`, `SparsePauliOp`)
+    // Parse & execute Qiskit Python subset (`QuantumCircuit`, nested `range` loops, `transpile`, `VerdantAqmProvider`, `VerdantAqmBackend`, `SamplerV2`, `EstimatorV2`, `SparsePauliOp`, `uorc` custody)
     const rawLines = source.split('\n');
-    const expandedLines: string[] = [];
     const numVars: Record<string, number> = { pi: Math.PI };
 
-    // Expand 1-level Python `for <var> in range(...):` blocks cleanly!
-    for (let i = 0; i < rawLines.length; i += 1) {
-      const line = rawLines[i].replace(/#.*$/, '');
-      if (!line.trim()) continue;
+    const substituteBoundVars = (stmt: string, localEnv: Readonly<Record<string, number>>): string => {
+      let out = stmt;
+      const keys = Object.keys(localEnv)
+        .filter((k) => k !== 'pi')
+        .sort((a, b) => b.length - a.length);
+      for (const k of keys) {
+        const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Replace standalone identifier tokens outside string quotes
+        out = out.replace(new RegExp(`(?<!['"a-zA-Z0-9_.])\\b${escaped}\\b(?!\\s*=[^=])`, 'g'), String(localEnv[k]));
+      }
+      return out;
+    };
 
-      const assignNum = /^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([0-9.+*/()\spiPI-]+)\s*$/.exec(line);
-      if (assignNum && !line.includes('QuantumCircuit') && !line.includes('Parameter')) {
-        try {
-          numVars[assignNum[1]] = evaluateQiskitAngle(assignNum[2], numVars);
+    const expandPythonBlock = (
+      lines: readonly string[],
+      startIdx: number,
+      parentIndent: number,
+      env: Record<string, number>,
+    ): { expanded: string[]; nextIdx: number } => {
+      const out: string[] = [];
+      let idx = startIdx;
+      while (idx < lines.length) {
+        const clean = lines[idx].replace(/#.*$/, '');
+        if (!clean.trim()) {
+          idx += 1;
           continue;
-        } catch {
-          // Not a scalar numeric assignment
         }
-      }
+        const curIndent = (/^(\s*)/.exec(clean)?.[1] ?? '').length;
+        if (curIndent <= parentIndent) break;
 
-      const forM = /^(\s*)for\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+in\s+range\(([^)]+)\)\s*:\s*$/.exec(line);
-      if (forM) {
-        const indentLen = forM[1].length;
-        const loopVar = forM[2];
-        const rangeArgs = forM[3].split(',').map((a) => Math.round(evaluateQiskitAngle(a.trim(), numVars)));
-        const start = rangeArgs.length >= 2 ? rangeArgs[0] : 0;
-        const stop = rangeArgs.length >= 2 ? rangeArgs[1] : rangeArgs[0];
-        const step = rangeArgs.length >= 3 ? rangeArgs[2] : 1;
-
-        const bodyLines: string[] = [];
-        let j = i + 1;
-        while (j < rawLines.length) {
-          const subRaw = rawLines[j].replace(/#.*$/, '');
-          if (!subRaw.trim()) {
-            j += 1;
+        const trimmedStmt = clean.trim();
+        const assignNum = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([0-9.+*/()\sa-zA-Z_-]+)$/.exec(trimmedStmt);
+        if (
+          assignNum &&
+          !trimmedStmt.includes('QuantumCircuit') &&
+          !trimmedStmt.includes('Parameter') &&
+          !trimmedStmt.includes('Verdant') &&
+          !trimmedStmt.includes('Sampler') &&
+          !trimmedStmt.includes('Estimator') &&
+          !trimmedStmt.includes('SparsePauliOp') &&
+          !trimmedStmt.includes('transpile')
+        ) {
+          try {
+            const val = evaluateQiskitAngle(assignNum[2], env);
+            env[assignNum[1]] = val;
+            if (parentIndent < 0) numVars[assignNum[1]] = val;
+            idx += 1;
             continue;
+          } catch {
+            // Fall through to statement handler
           }
-          const subIndent = (/^(\s*)/.exec(subRaw)?.[1] ?? '').length;
-          if (subIndent <= indentLen) break;
-          bodyLines.push(subRaw.trim());
-          j += 1;
         }
-        i = j - 1;
 
-        const escapedVar = new RegExp(`\\b${loopVar}\\b`, 'g');
-        for (let val = start; step > 0 ? val < stop : val > stop; val += step) {
-          for (const bLine of bodyLines) {
-            expandedLines.push(bLine.replace(escapedVar, String(val)));
+        const forM = /^for\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+in\s+range\(([^)]+)\)\s*:\s*$/.exec(trimmedStmt);
+        if (forM) {
+          const loopVar = forM[1];
+          const rangeArgs = forM[2].split(',').map((a) => Math.round(evaluateQiskitAngle(a.trim(), env)));
+          const start = rangeArgs.length >= 2 ? rangeArgs[0] : 0;
+          const stop = rangeArgs.length >= 2 ? rangeArgs[1] : rangeArgs[0];
+          const step = rangeArgs.length >= 3 ? rangeArgs[2] : 1;
+          if (step === 0) throw new Error('range() arg 3 must not be zero');
+
+          let bodyEnd = idx + 1;
+          while (bodyEnd < lines.length) {
+            const subClean = lines[bodyEnd].replace(/#.*$/, '');
+            if (!subClean.trim()) {
+              bodyEnd += 1;
+              continue;
+            }
+            const subIndent = (/^(\s*)/.exec(subClean)?.[1] ?? '').length;
+            if (subIndent <= curIndent) break;
+            bodyEnd += 1;
           }
+
+          for (let val = start; step > 0 ? val < stop : val > stop; val += step) {
+            const childEnv: Record<string, number> = { ...env, [loopVar]: val };
+            const sub = expandPythonBlock(lines.slice(0, bodyEnd), idx + 1, curIndent, childEnv);
+            out.push(...sub.expanded);
+          }
+          idx = bodyEnd;
+          continue;
         }
-        continue;
+
+        out.push(substituteBoundVars(trimmedStmt, env));
+        idx += 1;
       }
-      expandedLines.push(line.trim());
-    }
+      return { expanded: out, nextIdx: idx };
+    };
+
+    const expandedLines = expandPythonBlock(rawLines, 0, -1, { ...numVars }).expanded;
 
     const circuits = new Map<string, QuantumCircuitBuilder>();
-    const pauliOps = new Map<string, SparsePauliTerm[]>();
+    const pauliOps = new Map<string, { label: string; terms: SparsePauliTerm[] }>();
     let activeCircuit: QuantumCircuitBuilder | null = null;
     let shots = 1024;
     let seed = 42;
+    let weaveAtlas = false;
+    let verifyUorcRoundTrip = false;
     let forcedCellSubstrate: 'auto' | VerdantQiskitSubstrate = 'auto';
     let runMode: 'backend' | 'sampler' | 'estimator' = 'backend';
     let estimatorPrecision = 0.0;
-    let estimatorBindVec: number[] | undefined;
+    let paramBindSweep: number[] | number[][] | undefined;
     const estimatorObservables: Array<{ label: string; terms: SparsePauliTerm[] }> = [];
     const stdoutLines: string[] = [];
 
@@ -2843,11 +2976,57 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       return [evalInt(t)];
     };
 
+    const parseBindArgument = (rawArg: string | undefined): number[] | number[][] | undefined => {
+      if (!rawArg) return undefined;
+      const t = rawArg.trim();
+      if (!t.startsWith('[') || !t.endsWith(']')) return undefined;
+      const inner = t.slice(1, -1).trim();
+      if (!inner) return undefined;
+      if (inner.startsWith('[')) {
+        const rows = splitTopLevelCommas(inner);
+        return rows.map((row) =>
+          row
+            .replace(/^\[|\]$/g, '')
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .map((x) => evaluateQiskitAngle(x, numVars)),
+        );
+      }
+      if (inner.includes('"') || inner.includes("'")) return undefined;
+      return inner
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => evaluateQiskitAngle(x, numVars));
+    };
+
     for (const stmt of expandedLines) {
       if (stmt.startsWith('from ') || stmt.startsWith('import ')) continue;
 
+      if (/to_uorc_bytes|from_uorc_bytes|serializeQiskitResultToUorc/.test(stmt)) {
+        verifyUorcRoundTrip = true;
+      }
+
       const paramM = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*Parameter\(\s*['"]([^'"]+)['"]\s*\)/.exec(stmt);
       if (paramM) continue;
+
+      const providerBackendM = /\.get_backend\(\s*['"]([^'"]+)['"]\s*\)/.exec(stmt);
+      if (providerBackendM) {
+        new VerdantAqmProvider().get_backend(providerBackendM[1]);
+      }
+
+      const transpileM = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*transpile\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\b/.exec(stmt);
+      if (transpileM && circuits.has(transpileM[2])) {
+        const srcBuilt = circuits.get(transpileM[2])!.build();
+        const cloned = new QuantumCircuitBuilder(srcBuilt.qregs, srcBuilt.cregs, srcBuilt.name);
+        for (const inst of srcBuilt.instructions) {
+          cloned.append(inst.name, inst.qubits, inst.clbits, inst.params);
+        }
+        circuits.set(transpileM[1], cloned);
+        activeCircuit = cloned;
+        continue;
+      }
 
       const qcInitM = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*QuantumCircuit\(([^)]+)\)/.exec(stmt);
       if (qcInitM) {
@@ -2886,7 +3065,6 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
           continue;
         }
         if (method === 'measure') {
-          // Split top-level args respecting `[...]`
           const topArgs = splitTopLevelCommas(rawArgs);
           qc.measure(evalIntList(topArgs[0]), evalIntList(topArgs[1]));
           continue;
@@ -2898,6 +3076,12 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
         } else if (['rx', 'ry', 'rz', 'p'].includes(canon)) {
           const angleExpr = resolveParamToken(topArgs[0], numVars);
           for (const q of evalIntList(topArgs[1])) qc.append(canon, [q], undefined, [angleExpr]);
+        } else if (canon === 'u2') {
+          qc.u2(
+            resolveParamToken(topArgs[0], numVars),
+            resolveParamToken(topArgs[1], numVars),
+            evalInt(topArgs[2]),
+          );
         } else if (canon === 'u') {
           qc.u(
             resolveParamToken(topArgs[0], numVars),
@@ -2917,7 +3101,7 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
         continue;
       }
 
-      // SparsePauliOp.from_list([("ZZ", 1.0), ...]) or SparsePauliOp(["ZZ", "XX"], [0.5, -0.5])
+      // SparsePauliOp.from_list([("ZZ", 1.0), ...])
       const pauliFromListM = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*SparsePauliOp\.from_list\(\s*\[(.*)\]\s*\)/.exec(stmt);
       if (pauliFromListM) {
         const terms: SparsePauliTerm[] = [];
@@ -2926,11 +3110,11 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
         while ((m = tupleRegex.exec(pauliFromListM[2])) !== null) {
           terms.push([m[1].toUpperCase(), evaluateQiskitAngle(m[2], numVars)]);
         }
-        pauliOps.set(pauliFromListM[1], terms);
-        estimatorObservables.push({
+        const entry = {
           label: terms.map(([p, c]) => `${c >= 0 ? '+' : ''}${c}·${p}`).join(' '),
           terms,
-        });
+        };
+        pauliOps.set(pauliFromListM[1], entry);
         continue;
       }
 
@@ -2942,27 +3126,65 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       if (precM) estimatorPrecision = Number(precM[1]);
       const subM = /substrate\s*=\s*['"]([a-zA-Z]+)['"]/.exec(stmt);
       if (subM) forcedCellSubstrate = subM[1] as 'auto' | VerdantQiskitSubstrate;
+      if (/weave_atlas\s*=\s*(?:True|true|1)/.test(stmt)) weaveAtlas = true;
 
       if (/VerdantAqmSamplerV2|SamplerV2/.test(stmt)) runMode = 'sampler';
       if (/VerdantAqmEstimatorV2|EstimatorV2/.test(stmt)) runMode = 'estimator';
 
-      // Extract inline observable strings in estimator.run([(qc, ["ZZI", "IZZ"], [0.4])]) — zero Pauli width limit!
-      if (runMode === 'estimator' && /\.run\(/.test(stmt)) {
-        const vecM = /\[\s*([0-9.eE+\-,\spiPI*/]+)\s*\]\s*\)/.exec(stmt);
-        if (vecM && !vecM[1].includes('"') && !vecM[1].includes("'")) {
-          estimatorBindVec = vecM[1]
-            .split(',')
-            .map((v) => v.trim())
-            .filter(Boolean)
-            .map((v) => evaluateQiskitAngle(v, numVars));
-        }
-        if (estimatorObservables.length === 0) {
-          const strObs = Array.from(stmt.matchAll(/['"]([IXYZ]+)['"]/g)).map((m) => m[1]);
-          for (const sObs of strObs) {
-            estimatorObservables.push({ label: `<${sObs}>`, terms: [[sObs, 1.0]] });
+      // Extract PUB tuple in sampler.run([(qc, binds, shots)]) or estimator.run([(qc, obs, binds, precision)])
+      if ((runMode === 'sampler' || runMode === 'estimator') && /\.run\(\s*\[/.test(stmt)) {
+        const runInnerM = /\.run\(\s*\[\s*\((.+)\)\s*\]/.exec(stmt);
+        if (runInnerM) {
+          const pubParts = splitTopLevelCommas(runInnerM[1]);
+          const circVar = pubParts[0]?.trim();
+          if (circVar && circuits.has(circVar)) activeCircuit = circuits.get(circVar)!;
+
+          if (runMode === 'sampler') {
+            const parsedSweep = parseBindArgument(pubParts[1]);
+            if (parsedSweep) paramBindSweep = parsedSweep;
+            if (pubParts[2]) {
+              try {
+                shots = evalInt(pubParts[2]);
+              } catch {
+                // Keep existing shots
+              }
+            }
+          } else {
+            const obsArg = pubParts[1]?.trim() ?? '';
+            if (pauliOps.has(obsArg)) {
+              estimatorObservables.push(pauliOps.get(obsArg)!);
+            } else if (obsArg.startsWith('[') && obsArg.endsWith(']')) {
+              const items = splitTopLevelCommas(obsArg.slice(1, -1));
+              for (const item of items) {
+                const cleanItem = item.replace(/^['"]|['"]$/g, '').trim();
+                if (pauliOps.has(cleanItem)) {
+                  estimatorObservables.push(pauliOps.get(cleanItem)!);
+                } else if (/^[IXYZixyz]+$/.test(cleanItem)) {
+                  const up = cleanItem.toUpperCase();
+                  estimatorObservables.push({ label: `<${up}>`, terms: [[up, 1.0]] });
+                }
+              }
+            } else if (/^['"][IXYZixyz]+['"]$/.test(obsArg)) {
+              const up = obsArg.slice(1, -1).toUpperCase();
+              estimatorObservables.push({ label: `<${up}>`, terms: [[up, 1.0]] });
+            }
+
+            const parsedSweep = parseBindArgument(pubParts[2]);
+            if (parsedSweep) paramBindSweep = parsedSweep;
+            if (pubParts[3]) {
+              try {
+                estimatorPrecision = evaluateQiskitAngle(pubParts[3], numVars);
+              } catch {
+                // Keep existing precision
+              }
+            }
           }
         }
       }
+    }
+
+    if (runMode === 'estimator' && estimatorObservables.length === 0 && pauliOps.size > 0) {
+      for (const op of pauliOps.values()) estimatorObservables.push(op);
     }
 
     if (!activeCircuit) {
@@ -2975,6 +3197,7 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       seed_simulator: seed,
       memory: true,
       substrate: forcedCellSubstrate,
+      weave_atlas: weaveAtlas,
     });
 
     if (runMode === 'estimator') {
@@ -2988,19 +3211,28 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
         estimatorObservables.length > 0
           ? estimatorObservables.map((o) => o.terms)
           : [[[defaultPauli, 1.0]]];
-      const labels =
+      const baseLabels =
         estimatorObservables.length > 0
           ? estimatorObservables.map((o) => o.label)
           : [`<${defaultPauli}>`];
 
-      const pubRes = estimator.run([[builtCircuit, obsList, estimatorBindVec, estimatorPrecision]]).result()[0];
+      const pubRes = estimator.run([[builtCircuit, obsList, paramBindSweep, estimatorPrecision]]).result()[0];
       const evArr = Array.isArray(pubRes.data.evs) ? pubRes.data.evs : [pubRes.data.evs];
       const stdArr = Array.isArray(pubRes.data.stds) ? pubRes.data.stds : [pubRes.data.stds];
-      const expectations = labels.map((lbl, idx) => ({
-        label: lbl,
-        value: evArr[idx] ?? 0,
-        std: stdArr[idx] ?? 0,
-      }));
+      const sweepPoints =
+        Array.isArray(paramBindSweep) && Array.isArray(paramBindSweep[0]) ? paramBindSweep.length : 1;
+      const expectations: Array<{ label: string; value: number; std: number }> = [];
+      for (let sIdx = 0; sIdx < sweepPoints; sIdx += 1) {
+        for (let oIdx = 0; oIdx < baseLabels.length; oIdx += 1) {
+          const flatIdx = sIdx * baseLabels.length + oIdx;
+          const lbl = sweepPoints > 1 ? `${baseLabels[oIdx]} [sweep ${sIdx}]` : baseLabels[oIdx];
+          expectations.push({
+            label: lbl,
+            value: evArr[flatIdx] ?? 0,
+            std: stdArr[flatIdx] ?? 0,
+          });
+        }
+      }
       const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
 
       stdoutLines.push(
@@ -3031,9 +3263,9 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
 
     if (runMode === 'sampler') {
       const sampler = new VerdantAqmSamplerV2({ backend, defaultShots: shots, seed });
-      const pubRes = sampler.run([[builtCircuit, undefined, shots]]).result()[0];
+      const pubRes = sampler.run([[builtCircuit, paramBindSweep, shots]]).result()[0];
       const counts = pubRes.data.meas.get_counts();
-      const total = Math.max(1, shots);
+      const total = Math.max(1, pubRes.data.meas.num_shots);
       const probs: Record<string, number> = {};
       for (const [k, v] of Object.entries(counts)) probs[k] = v / total;
       const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
@@ -3062,7 +3294,12 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       };
     }
 
-    const res = backend.run(builtCircuit, { shots, seed_simulator: seed, memory: true }).result();
+    const res = backend.run(builtCircuit, {
+      shots,
+      seed_simulator: seed,
+      memory: true,
+      weave_atlas: weaveAtlas,
+    }).result();
     const exp = res.results[0];
     const counts = res.get_counts(0);
     const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
@@ -3073,6 +3310,18 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
     stdoutLines.push(
       `Circuit '${builtCircuit.name}': ${builtCircuit.numQubits} qubits, ${builtCircuit.numClbits} clbits | Active kets: ${exp.metadata.active_kets} | AQ-17 fused: ${exp.metadata.prism_fusion_eliminated}`,
     );
+    if (exp.metadata.sk_weaver_max_residual !== undefined) {
+      stdoutLines.push(
+        `SkWeaver PU(22) max projective residual: ${exp.metadata.sk_weaver_max_residual.toExponential(4)}`,
+      );
+    }
+    if (verifyUorcRoundTrip) {
+      const uorcBytes = res.toUorcBytes();
+      const restored = VerdantAqmResult.fromUorcBytes(uorcBytes);
+      stdoutLines.push(
+        `UORC lossless custody round-trip: ${uorcBytes.byteLength} bytes verified (job_id=${restored.job_id})`,
+      );
+    }
     stdoutLines.push(`Result.get_counts(): ${JSON.stringify(counts)}`);
     stdoutLines.push(`Holo provenance: ${exp.metadata.holo_kappa}`);
 

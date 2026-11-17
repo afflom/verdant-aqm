@@ -8,7 +8,7 @@
  *  2. Verifies `dist/index.html` uses subpath-safe relative `./assets/...` references so project
  *     sites (`https://<owner>.github.io/<repo>/`) load without 404s.
  *  3. Re-verifies `dist/app.holo` (`VerdantAqm.holo` v4) from disk: 32-byte BLAKE3 footer,
- *     zero-import `wasm32` sandbox, 6 exports, and all 26 `holo_run` acceptance vectors.
+ *     zero-import `wasm32` sandbox, 6 exports, and all 36 `holo_run` acceptance vectors.
  *  4. Verifies every file listed in `dist/precache.json` matches its recorded SHA-256 digest.
  *  5. Computes gzipped wire-transfer sizes (matching GitHub Pages gzip encoding) and enforces
  *     explicit `holo` and `app` wire budgets before `actions/upload-pages-artifact` runs.

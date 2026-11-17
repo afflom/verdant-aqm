@@ -1,7 +1,7 @@
 [package]
 name = "verdant-aqm"
-version = "0.2.0"
-description = "Prism-verified unbounded Abstract Quantum Machine over UOR semiring tensors, exact cyclotomic MPS, bit-packed symplectic tableaus, parametric surface codes, and Atlas topological holospace"
+version = "0.3.0"
+description = "Prism-verified unbounded Abstract Quantum Machine and Qiskit BackendV2 + Primitives V2 runtime over UOR semiring tensors, exact cyclotomic MPS, bit-packed symplectic tableaus, parametric surface codes, pure UORC wire containers, and Atlas topological holospace"
 authors = ["Verdant AQM Architecture"]
 license = "Apache-2.0"
 

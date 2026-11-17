@@ -9,7 +9,9 @@ import rawReferenceMd from '@/docs/reference/qiskit-backend-v2-and-primitives-ap
 import rawTutorialMd from '@/docs/tutorials/01-quickstart-qiskit-backend.md?raw';
 import pyProjectTomlRaw from '@/python/qiskit-verdant-aqm/pyproject.toml?raw';
 import pyReadmeRaw from '@/python/qiskit-verdant-aqm/README.md?raw';
+import pyAtlasUtqcRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/atlas_utqc.py?raw';
 import pyBackendRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/backend.py?raw';
+import pyHoloBridgeRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/holo_bridge.py?raw';
 import pyPrimitivesRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/primitives.py?raw';
 import pyProviderRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/provider.py?raw';
 import pyTestOracleRaw from '@/python/qiskit-verdant-aqm/tests/test_qiskit_oracle.py?raw';
@@ -96,6 +98,18 @@ const PYTHON_SDK_FILES: ReadonlyArray<{
     label: 'qiskit_verdant_aqm/provider.py',
     downloadName: 'provider.py',
     content: pyProviderRaw,
+  },
+  {
+    key: 'atlas-utqc',
+    label: 'qiskit_verdant_aqm/atlas_utqc.py',
+    downloadName: 'atlas_utqc.py',
+    content: pyAtlasUtqcRaw,
+  },
+  {
+    key: 'holo-bridge',
+    label: 'qiskit_verdant_aqm/holo_bridge.py',
+    downloadName: 'holo_bridge.py',
+    content: pyHoloBridgeRaw,
   },
   {
     key: 'oracle-test',

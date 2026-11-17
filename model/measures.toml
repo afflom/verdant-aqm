@@ -20,9 +20,9 @@ evidence = "AQ-13, open-tier scaling benchmark"
 id = "QM-03"
 characteristic = "Performance efficiency"
 subcharacteristic = "Time behaviour"
-metric = "Bit-packed F_2 symplectic Clifford step complexity"
-pinned_threshold = "O(n^2 / 64) 64-bit BigUint64Array word operations"
-evidence = "AQ-05"
+metric = "Column-transposed 32-row F_2 symplectic Clifford step and bit-sliced Z collapse complexity"
+pinned_threshold = "O(n / 32) 32-bit word operations per Clifford gate + O(n) zero-transpose bit-sliced Z collapse (inv016BitSlicedStabilizerCollapseMod4)"
+evidence = "AQ-04, AQ-18"
 
 [[measures]]
 id = "QM-04"
@@ -30,14 +30,14 @@ characteristic = "Reliability"
 subcharacteristic = "Fault tolerance"
 metric = "Rotated [[d^2, 1, d]] surface-code guaranteed single-sector fault correction radius"
 pinned_threshold = "t = floor((d - 1) / 2) Pauli faults for arbitrary odd d >= 3"
-evidence = "AQ-06, AQ-12"
+evidence = "AQ-05, AQ-12"
 
 [[measures]]
 id = "QM-05"
 characteristic = "Security"
 subcharacteristic = "Integrity & Containment"
 metric = "Core-Wasm guest host-import count and request BoundedBuffer ceiling"
-pinned_threshold = "0 imports, 64 UTF-8 bytes maximum request, 32/32 Wasm vectors passed"
+pinned_threshold = "0 imports, 64 UTF-8 bytes maximum request, 36/36 Wasm vectors passed"
 evidence = "AQ-01, AQ-15, AQ-18"
 
 [[measures]]
@@ -46,7 +46,7 @@ characteristic = "Compatibility"
 subcharacteristic = "Co-existence"
 metric = "Software tile PBR framebuffer alignment quantum"
 pinned_threshold = "16x16 pixels"
-evidence = "AQ-10"
+evidence = "AQ-09"
 
 [[measures]]
 id = "QM-07"
@@ -62,5 +62,21 @@ characteristic = "Interaction capability"
 subcharacteristic = "Learnability"
 metric = "Prism-DevRel Diataxis guide coverage, prose filler count, and executed Jupyter notebook parity"
 pinned_threshold = "0 uncovered capabilities, 0 undeclared covers, 0 filler words (CS-10), 3/3 verified .ipynb notebooks"
-evidence = "AQ-21, Honesty::inv004DevRelRefusesUncoveredOrUnverified"
+evidence = "AQ-21, Honesty::inv004DevRelRefusesUncoveredOrUnverified, model/content.json"
+
+[[measures]]
+id = "QM-09"
+characteristic = "Security"
+subcharacteristic = "Integrity & Authenticity"
+metric = "Post-boot UORC wire seal coverage and O(N) rolling hash-chain codec round-trip"
+pinned_threshold = "100% post-boot frames sealed with b\"UORC\" + 32B SHA-256 (except 3 modeled exemptions), 0 dense float allocations in CDMX"
+evidence = "AQ-22, Quantum::inv013UorcPostBootMandatoryUnlessExempt"
+
+[[measures]]
+id = "QM-10"
+characteristic = "Maintainability"
+subcharacteristic = "Analysability & Modularity"
+metric = "Permanent zero-constants parametric ratchet ceilings (prism/parametric-ratchet/1)"
+pinned_threshold = "6/6 ceilings = 0 across 10 .lex.tex modules and crates/verdant-aqm/src/**/*.rs; 6/6 planted violations refused"
+evidence = "AQ-23, Quantum::inv015ParametricRatchetZeroCeilings, model/parametric-ratchet.toml"
 

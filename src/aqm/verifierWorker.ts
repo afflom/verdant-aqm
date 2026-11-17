@@ -14,7 +14,6 @@ import {
 import {
   CORE_WASM_ACCEPTANCE_VECTORS,
   PLANTED_DEFECT_CATALOG,
-  dispatchCoreWasmQuery,
   verifyAndCompileCircuitPrism,
 } from './prismKernel';
 import { verifyConstructiveRatchet } from './stratum0';
@@ -54,7 +53,7 @@ function ensureHoloGuestReady(): Promise<{
   if (!cachedGuestPromise) {
     cachedGuestPromise = (async () => {
       const ratchet = verifyConstructiveRatchet();
-      const built = buildVerdantAqmHoloArchive('VerdantAqm@0.2.0:8-facets:AQ-01..AQ-16');
+      const built = buildVerdantAqmHoloArchive('VerdantAqm@0.3.0:8-facets:AQ-01..AQ-23');
       const report = await parseAndVerifyHoloV4Archive(built.archiveBytes);
       const guest = await instantiateHoloCoreWasmGuest(report.wasmBytes);
 
@@ -98,10 +97,8 @@ if (typeof self !== 'undefined' && typeof workerScope.postMessage === 'function'
           value: summary,
         });
       } else if (msg.kind === 'dispatch') {
-        // Execute through the REAL compiled wasm32 guest (`holo_alloc` + `holo_run`), falling back to TS kernel only for ad-hoc custom strings outside the 24 frozen Wasm dispatch vectors
-        const wasmOut = runHoloCoreWasmGuest(guest, msg.request);
-        const finalOut =
-          wasmOut === 'unsupported query' ? dispatchCoreWasmQuery(msg.request) : wasmOut;
+        // Execute every static and parameterized `aqm:eval:*` query directly inside the compiled zero-import `wasm32` guest (`holo_alloc` + `holo_run`)
+        const finalOut = runHoloCoreWasmGuest(guest, msg.request);
         workerScope.postMessage({
           id: msg.id,
           ok: true,

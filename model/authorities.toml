@@ -75,5 +75,20 @@ id = "PRISM-DEVREL-CS-01-11"
 title = "Prism-DevRel Content Standard CS-01..CS-11, Stakeholder Personas, and Diataxis Guide Architecture"
 clause = "afflom/prism-devrel scripts/content/standard.json & examples/devrel-publish-gate.prompt.json (commit ace153e37c7c29646f3efa6e273c3c4f8c9fb8bc)"
 facet = "Honesty.lex.tex, Compliance.lex.tex"
-evidence = "docs/** + src/aqm/devrelGuides.ts + Honesty::inv004DevRelRefusesUncoveredOrUnverified"
+evidence = "README.md + docs/** + model/content.json + src/aqm/devrelGuides.ts + Honesty::inv004DevRelRefusesUncoveredOrUnverified"
+
+[[authorities]]
+id = "UORC-WIRE-VE-36"
+title = "Verdant Engine Pure UORC Post-Boot Wire Specification & Explicit Boundary Exemptions"
+clause = "VE-36 (b\"UORC\" 13-byte header, O(N) OrderRope LZ77/RLE stream, 32-byte SHA-256 seal, CDMX zero-decode CodedMatrix, 3 boundary exemptions)"
+facet = "Quantum.lex.tex, Security.lex.tex, Compliance.lex.tex"
+evidence = "crates/verdant-aqm/src/uorc.rs + src/aqm/uorc.ts + python/qiskit-verdant-aqm/qiskit_verdant_aqm/uorc_wire.py + AQ-22"
+
+[[authorities]]
+id = "PRISM-PARAMETRIC-RATCHET-1"
+title = "Prism Permanent Zero-Constants Parametric Ratchet"
+clause = "FI-08 / spec = \"prism/parametric-ratchet/1\" (6 permanent zero ceilings across ontology, .lex.tex, and Rust guest)"
+facet = "Quantum.lex.tex, Quality.lex.tex, Compliance.lex.tex"
+evidence = "model/parametric-ratchet.toml + src/aqm/ratchet.ts + bootstrap/ratchet-gate.ts + AQ-23"
+
 

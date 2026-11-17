@@ -1,8 +1,8 @@
 [package]
 name = "verdant-aqm"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "Prism-verified unbounded Abstract Quantum Machine over Z[zeta_8], F_2 bit-planes, Tropical (min, +) semirings, and UOR Atlas topological braids"
+description = "Prism-verified unbounded Abstract Quantum Machine over Z[zeta_8], F_2 bit-planes, Tropical (min, +) semirings, pure UORC wire containers, and UOR Atlas topological braids"
 license = "Apache-2.0"
 
 [lib]

@@ -1,0 +1,140 @@
+{
+  "spec": "prism/content/1",
+  "about": "Prism-DevRel content configuration for Verdant AQM: maps each of the five stakeholders declared in app/src/Architecture.lex.tex to the canonical five Prism guides (Kai, Iris, Vera, Wren, Otto), binds Diataxis quadrants and repository documentation paths to readers, and declares domain terms explained across docs/ and notebooks/.",
+  "site": "Verdant AQM",
+  "pages": ["README.md", "CONFORMANCE.md", "docs/", "notebooks/"],
+  "defaultStage": "discover",
+  "defaultType": "explanation",
+  "personas": [
+    {
+      "id": "kai",
+      "start": "docs/tutorials/01-quickstart-qiskit-backend.md",
+      "stakeholder": "qiskitSdkAndDevRelUser",
+      "name": "Kai",
+      "prop": "terminal",
+      "accessory": "goggles",
+      "need": "Run standard Qiskit circuits, SamplerV2, and EstimatorV2 jobs on VerdantAqmBackend in minutes without cloud keys or dense qubit caps.",
+      "asks": {
+        "discover": "What is Verdant AQM, and how does it run my Qiskit circuits?",
+        "evaluate": "Does it pass Qiskit's own BackendV2 and Primitives V2 validation suites?",
+        "learn": "Walk me through building a Bell pair, sampling counts, and reading holo_kappa receipts.",
+        "build": "How do I execute parameterized PUBs in Python or Jupyter notebooks?",
+        "scale": "How do I share reproducible #uorc= snapshots and verified .ipynb notebooks?"
+      }
+    },
+    {
+      "id": "iris",
+      "start": "docs/how-to/unbounded-megascale-and-aer-migration.md",
+      "stakeholder": "quantumAlgorithmEngineer",
+      "name": "Iris",
+      "prop": "compass",
+      "accessory": "sparkle",
+      "need": "Scale Clifford+T, MPS, and stabilizer workloads past classical 28-32 qubit dense statevector walls with exact algebraic norms.",
+      "asks": {
+        "discover": "Which algebraic substrates replace dense 2^n complex statevectors?",
+        "evaluate": "When does Verdant AQM route to StabilizerTableau, CyclotomicExact, or ExactMps?",
+        "learn": "Show me how Z_8 phase-monoid fusion and active-wire compression eliminate redundant work.",
+        "build": "How do I migrate Qiskit Aer workflows to unbounded VerdantAqmBackend options?",
+        "scale": "How fast do 100,000-qubit Clifford and 10,000,000-qubit sparse Clifford+T circuits run?"
+      }
+    },
+    {
+      "id": "vera",
+      "start": "docs/explanation/prism-substrates-and-honesty-gates.md",
+      "stakeholder": "formalVerificationAuditor",
+      "name": "Vera",
+      "prop": "magnifier",
+      "accessory": "glasses",
+      "need": "Cryptographic and constructive proof that every claimed theorem, oracle lock, UORC seal, and ratchet ceiling holds without hidden axioms.",
+      "asks": {
+        "discover": "Which claims are constructive theorems, empirical build checks, or open research?",
+        "evaluate": "Are all six ceilings of prism/parametric-ratchet/1 permanently zero on disk?",
+        "learn": "Where is each STRIDE threat, UORC wire boundary, and upstream SHA-256 lock defined?",
+        "build": "Can a planted cloning gate, tampered UORC frame, or magic literal slip past the gates?",
+        "scale": "How is VerdantAqm.holo attested and re-verified on every GitHub Pages deployment?"
+      }
+    },
+    {
+      "id": "wren",
+      "start": "docs/index.md",
+      "stakeholder": "qecTopologicalResearcher",
+      "name": "Wren",
+      "prop": "quill",
+      "accessory": "headset",
+      "need": "Explore rotated [[d^2, 1, d]] surface-code tropical decoding, UOR Atlas D_4 MTC braids, and complete AQ-01..AQ-23 documentation coverage.",
+      "asks": {
+        "discover": "Which capabilities (AQ-01..AQ-23) and topological substrates does Verdant AQM expose?",
+        "evaluate": "How are surface-code minimum-weight recovery paths and PU(22) braids verified?",
+        "learn": "Which guide and notebook teaches each capability without filler prose?",
+        "build": "How do I simulate odd-distance surface codes and OpenQASM 2.0 SkWeaver compilations?",
+        "scale": "How does evaluateDevRelPublishGate keep docs, notebooks, and upstream pins synchronized?"
+      }
+    },
+    {
+      "id": "otto",
+      "start": "docs/reference/qiskit-backend-v2-and-primitives-api.md",
+      "stakeholder": "browserRuntimeOperator",
+      "name": "Otto",
+      "prop": "wrench",
+      "accessory": "beanie",
+      "need": "Exact API signatures, 28-instruction Target ISA tables, pure UORC wire layouts, and zero-import Wasm worker budgets.",
+      "asks": {
+        "discover": "What runs inside the Web Worker, Python SDK, and GitHub Pages bundle?",
+        "evaluate": "What are the wire-weight budgets, Wasm exports, and UORC transport exemptions?",
+        "learn": "Which CLI script builds, tests, ratchets, and verifies each artifact?",
+        "build": "What options do VerdantAqmBackend, SamplerV2, and EstimatorV2 accept?",
+        "scale": "How does input-addressed BLAKE3 kappa caching keep CI builds deterministic?"
+      }
+    }
+  ],
+  "audience": [
+    { "path": "^README\\.md$", "persona": "wren" },
+    { "path": "^CONFORMANCE\\.md$", "persona": "vera" },
+    { "path": "^docs/index\\.md$", "persona": "wren" },
+    { "path": "^docs/tutorials/", "persona": "kai" },
+    { "path": "^docs/how-to/", "persona": "iris" },
+    { "path": "^docs/reference/", "persona": "otto" },
+    { "path": "^docs/explanation/", "persona": "vera" },
+    { "path": "^notebooks/01_", "persona": "kai" },
+    { "path": "^notebooks/02_", "persona": "iris" },
+    { "path": "^notebooks/03_", "persona": "wren" },
+    { "diataxis": "tutorial", "persona": "kai" },
+    { "diataxis": "howToGuide", "persona": "iris" },
+    { "diataxis": "reference", "persona": "otto" },
+    { "diataxis": "explanation", "persona": "vera" }
+  ],
+  "reading": {
+    "tutorial": "A tutorial: follow the steps in order. Each one works if the one before it did.",
+    "howToGuide": "A how-to guide: each section is one step toward one task. Skip what you already have.",
+    "reference": "Reference: look up what you need. Nothing here asks to be read in order.",
+    "explanation": "Explanation: read it end to end, away from the keyboard.",
+    "home": "Start at the entry card for your role. Each path leads to the guide and notebook for one stakeholder."
+  },
+  "terms": [
+    {
+      "term": "cyclotomic ring",
+      "match": ["cyclotomic rings?", "Z\\[zeta_8\\]"],
+      "plain": "Exact integer polynomial ring Z[zeta_8] scaled by powers of sqrt(2), representing Clifford+T amplitudes with zero floating-point rounding."
+    },
+    {
+      "term": "symplectic tableau",
+      "match": ["symplectic tableaus?", "stabilizer tableaus?"],
+      "plain": "Binary F_2 matrix of 2n Pauli generators tracking n-qubit Clifford states in polynomial memory (Gottesman-Knill)."
+    },
+    {
+      "term": "PUB",
+      "case": true,
+      "plain": "Qiskit Primitive Unified Bloc: a tuple of (circuit, observables, parameter_values, precision_or_shots) passed to SamplerV2 or EstimatorV2."
+    },
+    {
+      "term": "UORC",
+      "case": true,
+      "plain": "Universal Object Reference Container: SHA-256-sealed binary wire envelope (magic bytes b\"UORC\") carrying all post-boot state, snapshots, and coded matrices."
+    },
+    {
+      "term": "parametric ratchet",
+      "match": ["parametric ratchet"],
+      "plain": "Permanent governance gate (prism/parametric-ratchet/1, FI-08) holding ontology literals > 1, Classical.choice, and magic constants at zero."
+    }
+  ]
+}

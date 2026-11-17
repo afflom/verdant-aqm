@@ -63,10 +63,11 @@ jobs:
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
 
-      - name: Verify TypeScript types, 8-facet Prism conformance, 32 Wasm vectors & Python Qiskit oracle
+      - name: Verify parametric ratchet, TypeScript types, 8-facet Prism conformance, 36 Wasm vectors & Python Qiskit oracle
         shell: bash
         run: |
           set -euo pipefail
+          npm run ratchet
           npm run lint
           npm test
           npm run test:python
@@ -142,7 +143,7 @@ jobs:
           npx tsx bootstrap/assemble-pages.ts dist
           npx tsx bootstrap/precache.ts dist
 
-      - name: Verify assembled site integrity, 32/32 Wasm replay, and FR-03 wire-weight gate
+      - name: Verify assembled site integrity, 36/36 Wasm replay, parametric ratchet, and FR-03 wire-weight gate
         shell: bash
         run: |
           set -euo pipefail

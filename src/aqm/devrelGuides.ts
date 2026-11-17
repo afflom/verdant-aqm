@@ -560,9 +560,38 @@ export interface DevRelContentAuditReport {
   readonly gateOk: boolean;
 }
 
+export function auditMarkdownProseStandard(
+  sourceId: string,
+  md: string,
+): {
+  readonly fillerViolations: ReadonlyArray<{ source: string; word: string }>;
+  readonly vagueLinkViolations: ReadonlyArray<{ source: string; label: string }>;
+} {
+  const fillerViolations: Array<{ source: string; word: string }> = [];
+  const vagueLinkViolations: Array<{ source: string; label: string }> = [];
+  const proseOnly = md.replace(/```[\s\S]*?```/g, '').replace(/`[^`]+`/g, '');
+
+  for (const word of PRISM_DEVREL_BANNED_FILLER) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (re.test(proseOnly)) {
+      fillerViolations.push({ source: sourceId, word });
+    }
+  }
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = linkRe.exec(proseOnly)) !== null) {
+    const lbl = m[1].trim().toLowerCase();
+    if (PRISM_DEVREL_VAGUE_LINKS.includes(lbl)) {
+      vagueLinkViolations.push({ source: sourceId, label: m[1] });
+    }
+  }
+  return { fillerViolations, vagueLinkViolations };
+}
+
 /**
- * Audits Diataxis Markdown guides and Jupyter notebooks against `afflom/prism-devrel`'s
- * `standard.json` (`CS-01..CS-11`) and `devrel-publish-gate.prompt.json`.
+ * Audits Diataxis Markdown guides, repository Markdown twins, and Jupyter notebooks against
+ * `afflom/prism-devrel`'s `standard.json` (`CS-01..CS-11`) and `devrel-publish-gate.prompt.json`.
  */
 export function runDevRelContentAndPublishGateAudit(
   guideMarkdownByPath: Readonly<Record<string, string>>,
@@ -571,33 +600,24 @@ export function runDevRelContentAndPublishGateAudit(
   const fillerViolations: Array<{ source: string; word: string }> = [];
   const vagueLinkViolations: Array<{ source: string; label: string }> = [];
 
-  const stripFencedCode = (md: string): string =>
-    md.replace(/```[\s\S]*?```/g, '').replace(/`[^`]+`/g, '');
-
   const checkMarkdownProse = (sourceId: string, md: string) => {
-    const proseOnly = stripFencedCode(md);
-    for (const word of PRISM_DEVREL_BANNED_FILLER) {
-      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(`\\b${escaped}\\b`, 'i');
-      if (re.test(proseOnly)) {
-        fillerViolations.push({ source: sourceId, word });
-      }
-    }
-    const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let m: RegExpExecArray | null;
-    while ((m = linkRe.exec(proseOnly)) !== null) {
-      const lbl = m[1].trim().toLowerCase();
-      if (PRISM_DEVREL_VAGUE_LINKS.includes(lbl)) {
-        vagueLinkViolations.push({ source: sourceId, label: m[1] });
-      }
-    }
+    const res = auditMarkdownProseStandard(sourceId, md);
+    fillerViolations.push(...res.fillerViolations);
+    vagueLinkViolations.push(...res.vagueLinkViolations);
   };
 
+  const auditedPaths = new Set<string>();
   const combinedCorpusParts: string[] = [];
   for (const meta of DIATAXIS_GUIDE_META) {
     const md = guideMarkdownByPath[meta.path] ?? '';
+    auditedPaths.add(meta.path);
     checkMarkdownProse(meta.path, md);
     combinedCorpusParts.push(md);
+  }
+  for (const [extraPath, extraMd] of Object.entries(guideMarkdownByPath)) {
+    if (!auditedPaths.has(extraPath)) {
+      checkMarkdownProse(extraPath, extraMd);
+    }
   }
 
   let unverifiedNotebooks = 0;

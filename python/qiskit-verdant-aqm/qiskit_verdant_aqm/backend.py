@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+from .atlas_utqc import execute_atlas_holospace_batch, weave_rotations_with_sk_weaver
 from .holo_bridge import compute_job_kappa
 from .uorc_wire import compress_uorc_portable, decompress_uorc_portable
 
@@ -110,6 +111,7 @@ TARGET_ISA_28: tuple[tuple[str, int | str, int, bool, bool], ...] = (
 ISA_INFO_MAP: dict[str, tuple[int | str, int, bool, bool]] = {
     name: (nq, npar, cliff, cyc) for name, nq, npar, cliff, cyc in TARGET_ISA_28
 }
+ISA_INFO_MAP["u2"] = (1, 2, False, False)
 
 ISA_ALIASES: dict[str, str] = {
     "i": "id",
@@ -250,6 +252,8 @@ class QuantumCircuit:
     def ry(self, theta: Any, q: int) -> QuantumCircuit: return self.append_op("ry", (q,), (), (theta,))
     def rz(self, theta: Any, q: int) -> QuantumCircuit: return self.append_op("rz", (q,), (), (theta,))
     def p(self, lam: Any, q: int) -> QuantumCircuit: return self.append_op("p", (q,), (), (lam,))
+    def u2(self, phi: Any, lam: Any, q: int) -> QuantumCircuit:
+        return self.append_op("u2", (q,), (), (phi, lam))
     def u(self, theta: Any, phi: Any, lam: Any, q: int) -> QuantumCircuit:
         return self.append_op("u", (q,), (), (theta, phi, lam))
     def cx(self, c: int, t: int) -> QuantumCircuit: return self.append_op("cx", (c, t))
@@ -1491,6 +1495,32 @@ def sample_exact_mps_chain_rule(
 EPS_PRUNE = 1e-15
 
 
+class CompactedSparseState(dict[int, complex]):
+    """Sparse state dictionary carrying active-wire compaction map for O(|active_wires|) megascale execution."""
+
+    wire_to_compact: dict[int, int] | None = None
+
+
+def _compact_instructions(
+    instructions: Sequence[NormalizedInstruction],
+) -> tuple[list[NormalizedInstruction], dict[int, int]]:
+    wire_to_compact: dict[int, int] = {}
+    compacted: list[NormalizedInstruction] = []
+    for inst in instructions:
+        canon = ISA_ALIASES.get(inst.name, inst.name)
+        if canon == "barrier":
+            continue
+        mapped_qs: list[int] = []
+        for q in inst.qubits:
+            c_idx = wire_to_compact.get(q)
+            if c_idx is None:
+                c_idx = len(wire_to_compact)
+                wire_to_compact[q] = c_idx
+            mapped_qs.append(c_idx)
+        compacted.append(NormalizedInstruction(inst.name, tuple(mapped_qs), inst.clbits, inst.params))
+    return compacted, wire_to_compact
+
+
 def _apply_1q_sparse(
     state: dict[int, complex],
     wire: int,
@@ -1598,6 +1628,17 @@ def apply_unitary_sparse_continuum(
     if c == "p":
         lm = _eval_angle(inst.params[0], bindings)
         return _apply_1q_sparse(state, qs[0], 1 + 0j, 0j, 0j, cmath.exp(1j * lm))
+    if c == "u2":
+        ph = _eval_angle(inst.params[0], bindings)
+        lm = _eval_angle(inst.params[1], bindings)
+        return _apply_1q_sparse(
+            state,
+            qs[0],
+            s,
+            -cmath.exp(1j * lm) * s,
+            cmath.exp(1j * ph) * s,
+            cmath.exp(1j * (ph + lm)) * s,
+        )
     if c == "u":
         th = _eval_angle(inst.params[0], bindings)
         ph = _eval_angle(inst.params[1], bindings)
@@ -2043,13 +2084,28 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             return ("ExactMps", mps, unitary_circuit)
         if is_cyc and sub not in ("ExactSparseContinuum", "AtlasHolospace"):
             steps, _ = _decompose_exact_gate_sequence(unitary_ops, bind)
-            cyc_map, k, _ = execute_sparse_cyclotomic(steps)
-            sparse_c = {ket: _z8_to_complex(amp, k) for ket, amp in cyc_map.items()}
+            wire_to_compact: dict[int, int] = {}
+            compact_steps: list[tuple[str, tuple[int, ...]]] = []
+            for op, qs in steps:
+                mapped_qs: list[int] = []
+                for q in qs:
+                    c_idx = wire_to_compact.get(q)
+                    if c_idx is None:
+                        c_idx = len(wire_to_compact)
+                        wire_to_compact[q] = c_idx
+                    mapped_qs.append(c_idx)
+                compact_steps.append((op, tuple(mapped_qs)))
+            cyc_map, k, _ = execute_sparse_cyclotomic(compact_steps)
+            sparse_c = CompactedSparseState({ket: _z8_to_complex(amp, k) for ket, amp in cyc_map.items()})
+            sparse_c.wire_to_compact = wire_to_compact
             return ("CyclotomicExact", sparse_c, unitary_circuit)
+        compact_ops, wire_to_compact = _compact_instructions(unitary_ops)
         sparse: dict[int, complex] = {0: 1.0 + 0.0j}
-        for inst in unitary_ops:
+        for inst in compact_ops:
             sparse = apply_unitary_sparse_continuum(sparse, inst, bind)
-        return ("AtlasHolospace" if sub == "AtlasHolospace" else "ExactSparseContinuum", sparse, unitary_circuit)
+        out_sparse = CompactedSparseState(sparse)
+        out_sparse.wire_to_compact = wire_to_compact
+        return ("AtlasHolospace" if sub == "AtlasHolospace" else "ExactSparseContinuum", out_sparse, unitary_circuit)
 
     def run(self, run_input: Any, **run_options: Any) -> VerdantAqmJob:
         raw_list = list(run_input) if isinstance(run_input, (list, tuple)) else [run_input]
@@ -2066,6 +2122,7 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
         record_memory = bool(run_options.get("memory", getattr(self._options, "memory", False)))
         forced_sub = str(run_options.get("substrate", getattr(self._options, "substrate", "auto")))
         use_fusion = bool(run_options.get("prism_fusion", getattr(self._options, "prism_fusion", True)))
+        weave_atlas = bool(run_options.get("weave_atlas", getattr(self._options, "weave_atlas", False)))
         binds_list: list[dict[str, float]] = list(run_options.get("parameter_binds") or [{}])
 
         exp_results: list[ExperimentResult] = []
@@ -2077,7 +2134,14 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 exp_idx += 1
                 exp_results.append(
                     self._execute_single(
-                        circuit, bind_map, shots, seed, record_memory, forced_sub, use_fusion
+                        circuit,
+                        bind_map,
+                        shots,
+                        seed,
+                        record_memory,
+                        forced_sub,
+                        use_fusion,
+                        weave_atlas,
                     )
                 )
 
@@ -2110,6 +2174,7 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
         memory: bool,
         forced_substrate: str,
         use_fusion: bool = True,
+        weave_atlas: bool = False,
     ) -> ExperimentResult:
         rng = random.Random(seed)
         auto_sub, is_cliff, is_cyc = self._select_substrate(circuit, bindings)
@@ -2135,6 +2200,67 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
         active_kets = 1
         fusion_elim = 0
         norm_exact_one = True
+        sk_weaver_max_residual: float | None = None
+        atlas_unique_kappas: int | None = None
+        atlas_elided_steps: int | None = None
+
+        if weave_atlas or chosen_sub == "AtlasHolospace":
+            rot_specs: list[tuple[str, int, float]] = []
+            seen_rot_keys: set[tuple[str, int]] = set()
+            for inst in circuit.instructions[:first_non_unitary]:
+                c_op = ISA_ALIASES.get(inst.name, inst.name)
+                if c_op in ("rx", "ry", "rz", "p"):
+                    ang = _eval_angle(inst.params[0], bindings)
+                    key = (c_op, int(round(ang * 1e12)))
+                    if key not in seen_rot_keys:
+                        seen_rot_keys.add(key)
+                        rot_specs.append(("rz" if c_op == "p" else c_op, inst.qubits[0], ang))
+                elif c_op == "u2":
+                    ph = _eval_angle(inst.params[0], bindings)
+                    lm = _eval_angle(inst.params[1], bindings)
+                    for sub_op, ang in (("rz", lm), ("ry", math.pi * 0.5), ("rz", ph)):
+                        key = (sub_op, int(round(ang * 1e12)))
+                        if key not in seen_rot_keys:
+                            seen_rot_keys.add(key)
+                            rot_specs.append((sub_op, inst.qubits[0], ang))
+                elif c_op == "u":
+                    th = _eval_angle(inst.params[0], bindings)
+                    ph = _eval_angle(inst.params[1], bindings)
+                    lm = _eval_angle(inst.params[2], bindings)
+                    for sub_op, ang in (("rz", lm), ("ry", th), ("rz", ph)):
+                        key = (sub_op, int(round(ang * 1e12)))
+                        if key not in seen_rot_keys:
+                            seen_rot_keys.add(key)
+                            rot_specs.append((sub_op, inst.qubits[0], ang))
+
+            if rot_specs:
+                woven = weave_rotations_with_sk_weaver(
+                    rot_specs,
+                    qubit_count=max(1, len({w for _, w, _ in rot_specs})),
+                    carrier="Certified22",
+                    epsilon_target=1e-4,
+                )
+                sk_weaver_max_residual = woven.max_projective_residual
+                atlas_unique_kappas = woven.unique_prefix_kappas
+            else:
+                sk_weaver_max_residual = 0.0
+
+            if is_cyc:
+                cyc_steps, _ = _decompose_exact_gate_sequence(
+                    circuit.instructions[:first_non_unitary], bindings, enable_fusion=use_fusion
+                )
+                w_map: dict[int, int] = {}
+                c_steps: list[tuple[str, tuple[int, ...]]] = []
+                for op_s, qs_s in cyc_steps:
+                    m_qs = []
+                    for q in qs_s:
+                        if q not in w_map:
+                            w_map[q] = len(w_map)
+                        m_qs.append(w_map[q])
+                    c_steps.append((op_s, tuple(m_qs)))
+                holo_batch = execute_atlas_holospace_batch(max(1, len(w_map)), c_steps)
+                atlas_unique_kappas = holo_batch.unique_kappas
+                atlas_elided_steps = holo_batch.elided_step_hits
 
         def record_shot(clbits: list[int]) -> None:
             fmt = _format_qiskit_bitstring(clbits, circuit.cregs)
@@ -2255,18 +2381,20 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                             probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
                     sample_from_probabilities()
             else:
+                compact_prefix, wire_to_compact = _compact_instructions(prefix)
                 sparse: dict[int, complex] = {0: 1.0 + 0.0j}
-                for inst in prefix:
+                for inst in compact_prefix:
                     sparse = apply_unitary_sparse_continuum(sparse, inst, bindings)
                 active_kets = len(sparse)
                 mass = 0.0
+                meas_compact = [(m.clbits[0], wire_to_compact.get(m.qubits[0], -1)) for m in meas_ops]
                 for ket, amp in sparse.items():
                     prob = amp.real * amp.real + amp.imag * amp.imag
                     mass += prob
                     if prob > 1e-16 and meas_ops and circuit.num_clbits > 0:
                         full_cl = [0] * circuit.num_clbits
-                        for m in meas_ops:
-                            full_cl[m.clbits[0]] = 1 if (ket & (1 << m.qubits[0])) else 0
+                        for cl_dst, c_wire in meas_compact:
+                            full_cl[cl_dst] = 1 if (c_wire >= 0 and (ket & (1 << c_wire))) else 0
                         fmt = _format_qiskit_bitstring(full_cl, circuit.cregs)
                         probabilities[fmt] = probabilities.get(fmt, 0.0) + prob
                 norm_exact_one = abs(mass - 1.0) < 1e-11
@@ -2313,15 +2441,39 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
             for k_str, cnt in formatted_counts.items():
                 probabilities[k_str] = cnt / shots
         else:
-            # Dynamic mid-circuit measurement / reset trajectory execution with cached deterministic prefix!
-            chosen_sub = "CyclotomicExact" if is_cyc else "ExactSparseContinuum"
+            # Dynamic mid-circuit measurement / reset trajectory execution with active-wire compaction!
+            if forced_substrate == "AtlasHolospace":
+                chosen_sub = "AtlasHolospace"
+            else:
+                chosen_sub = "CyclotomicExact" if is_cyc else "ExactSparseContinuum"
+            _, wire_to_compact = _compact_instructions(circuit.instructions)
+            compact_prefix = [
+                NormalizedInstruction(
+                    inst.name,
+                    tuple(wire_to_compact[q] for q in inst.qubits),
+                    inst.clbits,
+                    inst.params,
+                )
+                for inst in circuit.instructions[:first_non_unitary]
+                if ISA_ALIASES.get(inst.name, inst.name) != "barrier"
+            ]
+            compact_tail = [
+                NormalizedInstruction(
+                    inst.name,
+                    tuple(wire_to_compact[q] for q in inst.qubits),
+                    inst.clbits,
+                    inst.params,
+                )
+                for inst in tail
+                if ISA_ALIASES.get(inst.name, inst.name) != "barrier"
+            ]
             base_sparse: dict[int, complex] = {0: 1.0 + 0.0j}
-            for inst in circuit.instructions[:first_non_unitary]:
+            for inst in compact_prefix:
                 base_sparse = apply_unitary_sparse_continuum(base_sparse, inst, bindings)
             for _ in range(shots):
                 sparse = dict(base_sparse)
                 full_cl = [0] * circuit.num_clbits
-                for inst in tail:
+                for inst in compact_tail:
                     c = ISA_ALIASES.get(inst.name, inst.name)
                     if c == "measure":
                         sparse, bit = _measure_or_reset_sparse(sparse, inst.qubits[0], rng, False)
@@ -2344,6 +2496,20 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 "counts": hex_counts,
             }
         )
+        meta: dict[str, Any] = {
+            "substrate": chosen_sub,
+            "active_kets": active_kets,
+            "prism_fusion_eliminated": fusion_elim,
+            "norm_exact_one": norm_exact_one,
+            "holo_kappa": holo_kappa,
+        }
+        if sk_weaver_max_residual is not None:
+            meta["sk_weaver_max_residual"] = sk_weaver_max_residual
+        if atlas_unique_kappas is not None:
+            meta["atlas_unique_kappas"] = atlas_unique_kappas
+        if atlas_elided_steps is not None:
+            meta["atlas_elided_steps"] = atlas_elided_steps
+            meta["atlas_carrier_bytes"] = 768
         return ExperimentResult(
             shots=shots,
             success=True,
@@ -2362,11 +2528,5 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 probabilities=probabilities,
                 memory=shot_memory if memory else None,
             ),
-            metadata={
-                "substrate": chosen_sub,
-                "active_kets": active_kets,
-                "prism_fusion_eliminated": fusion_elim,
-                "norm_exact_one": norm_exact_one,
-                "holo_kappa": holo_kappa,
-            },
+            metadata=meta,
         )

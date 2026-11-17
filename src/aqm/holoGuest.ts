@@ -13,7 +13,7 @@
  *    with 6 verified exports:
  *      1. `memory` (256 KiB linear memory)
  *      2. `holo_alloc(len: i32) -> i32`
- *      3. `holo_run(ptr: i32, len: i32) -> i64` (26 `CORE_WASM_ACCEPTANCE_VECTORS` + 64B `BoundedBuffer`)
+ *      3. `holo_run(ptr: i32, len: i32) -> i64` (36 `CORE_WASM_ACCEPTANCE_VECTORS` + dynamic `aqm:eval:*` + 64B `BoundedBuffer`)
  *      4. `wasm_symplectic_commute(x1, z1, x2, z2, words) -> i32` (native `i64.popcnt` symplectic inner product)
  *      5. `wasm_coded_packed4_gemv(act, nibs, grid, out, rows, packedCols) -> i32` (exact `i64` zero-decode GEMV)
  *      6. `wasm_tropical_minplus_closure(dist, nextHop, n) -> i32` (native `k7` Tropical `(min, +)` closure)
@@ -96,16 +96,61 @@ function encodeWasmStr(s: string): number[] {
 
 /**
  * Assembles a genuine, spec-valid, zero-import `wasm32` binary module implementing
- * `hologram:guest/core-wasm@1` + 3 native Wasm compute kernels (`AQ-15`, `AQ-18`).
+ * `hologram:guest/core-wasm@1` + dynamic parameterized invariant evaluation + 3 native Wasm compute kernels (`AQ-15`, `AQ-18`).
  */
 export function assembleCoreWasmGuestBinary(): Uint8Array {
   const enc = new TextEncoder();
+
+  // Dynamic evaluator string pool at 0x0100 .. 0x0300
+  const DYN_POOL_BASE = 0x0100;
+  let dynCursor = DYN_POOL_BASE;
+  const dynChunks: Uint8Array[] = [];
+  const allocDynStr = (str: string): { ptr: number; len: number } => {
+    const b = enc.encode(str);
+    const ptr = dynCursor;
+    dynChunks.push(b);
+    dynCursor += b.byteLength;
+    return { ptr, len: b.byteLength };
+  };
+
+  const pfxSurface = allocDynStr('aqm:eval:surface:');
+  const pfxWire = allocDynStr('aqm:eval:wire:');
+  const pfxPhase = allocDynStr('aqm:eval:phase:');
+  const pfxQiskit = allocDynStr('aqm:eval:qiskit:');
+
+  const rspSurfOk = allocDynStr('conformant:surface_distance_admitted');
+  const rspSurfNo = allocDynStr('refused:even-surface-code-distance');
+  const rspWireOk = allocDynStr('conformant:wires_linear_admitted');
+  const rspWireOob = allocDynStr('refused:wire-out-of-bounds');
+  const rspWireCln = allocDynStr('refused:duplicate-wire-cloning');
+  const rspQiskOk = allocDynStr('conformant:qiskit_target_unbounded');
+  const rspQiskCap = allocDynStr('refused:arbitrary-classical-qubit-cap');
+  const rspQiskWid = allocDynStr('refused:invalid-register-width');
+  const rspQiskSht = allocDynStr('refused:invalid-shot-count');
+  const dynPoolBytes = concatBytes(dynChunks);
+
   const invalidBytes = enc.encode('invalid request'); // 15 bytes at 0x0400
   const INVALID_PTR = 0x0400;
   const INVALID_LEN = invalidBytes.length;
 
+  // Mutable 23-byte phase response template at 0x0440 ("conformant:phase_mod8=0") + 16-byte u32 parse scratch at 0x0460
+  const PHASE_OUT_PTR = 0x0440;
+  const phaseTemplateBytes = enc.encode('conformant:phase_mod8=0');
+  const PHASE_OUT_LEN = phaseTemplateBytes.length; // 23
+  const PARSE_SCRATCH_PTR = 0x0460;
+
   const TABLE_BASE = 0x0500;
-  const rules = CORE_WASM_ACCEPTANCE_VECTORS.map((v) => ({
+  const extraDefectRules = [
+    {
+      request: 'aqm:defect:illegal-commute',
+      expectedResponse: 'refused:illegal-noncommuting-push',
+    },
+    {
+      request: 'aqm:defect:uorc-lossy',
+      expectedResponse: 'refused:corrupted-order-rope-stream',
+    },
+  ];
+  const rules = [...CORE_WASM_ACCEPTANCE_VECTORS, ...extraDefectRules].map((v) => ({
     req: enc.encode(v.request),
     resp: enc.encode(v.expectedResponse),
   }));
@@ -146,6 +191,7 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
   const OP_BR = 0x0c;
   const OP_BR_IF = 0x0d;
   const OP_RETURN = 0x0f;
+  const OP_CALL = 0x10;
   const OP_LOCAL_GET = 0x20;
   const OP_LOCAL_SET = 0x21;
   const OP_LOCAL_TEE = 0x22;
@@ -156,19 +202,24 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
   const OP_I32_LOAD8_U = 0x2d;
   const OP_I32_STORE = 0x36;
   const OP_I64_STORE = 0x37;
+  const OP_I32_STORE8 = 0x3a;
   const OP_I32_CONST = 0x41;
   const OP_I64_CONST = 0x42;
   const OP_I32_EQZ = 0x45;
   const OP_I32_EQ = 0x46;
   const OP_I32_NE = 0x47;
   const OP_I32_LT_S = 0x48;
+  const OP_I32_LT_U = 0x49;
   const OP_I32_GT_S = 0x4a;
   const OP_I32_GT_U = 0x4b;
   const OP_I32_LE_S = 0x4c;
+  const OP_I32_GE_S = 0x4e;
   const OP_I32_GE_U = 0x4f;
   const OP_I32_ADD = 0x6a;
+  const OP_I32_SUB = 0x6b;
   const OP_I32_MUL = 0x6c;
   const OP_I32_AND = 0x71;
+  const OP_I32_OR = 0x72;
   const OP_I32_XOR = 0x73;
   const OP_I32_SHL = 0x74;
   const OP_I32_SHR_U = 0x76;
@@ -187,23 +238,36 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
   const TYPE_I32 = 0x7f;
   const TYPE_I64 = 0x7e;
 
-  // Section 1: Type section — 5 function signatures
+  const emitPackReturn = (ptr: number, len: number): number[] => [
+    OP_I32_CONST, ...sleb128(ptr),
+    OP_I64_EXTEND_I32_U,
+    OP_I64_CONST, ...sleb128(32),
+    OP_I64_SHL,
+    OP_I32_CONST, ...sleb128(len),
+    OP_I64_EXTEND_I32_U,
+    OP_I64_OR,
+    OP_RETURN,
+  ];
+
+  // Section 1: Type section — 6 function signatures (funcs 5 & 6 are internal helpers)
   //   type 0: (i32) -> (i32)                           holo_alloc
   //   type 1: (i32, i32) -> (i64)                      holo_run
   //   type 2: (i32, i32, i32, i32, i32) -> (i32)       wasm_symplectic_commute
   //   type 3: (i32, i32, i32, i32, i32, i32) -> (i32)  wasm_coded_packed4_gemv
   //   type 4: (i32, i32, i32) -> (i32)                 wasm_tropical_minplus_closure
+  //   type 5: (i32, i32, i32, i32) -> (i32)            internal starts_with & parse_u32_delim
   const typeSec = wasmSection(1, [
-    ...uleb128(5),
+    ...uleb128(6),
     0x60, 1, TYPE_I32, 1, TYPE_I32,
     0x60, 2, TYPE_I32, TYPE_I32, 1, TYPE_I64,
     0x60, 5, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, 1, TYPE_I32,
     0x60, 6, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, 1, TYPE_I32,
     0x60, 3, TYPE_I32, TYPE_I32, TYPE_I32, 1, TYPE_I32,
+    0x60, 4, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, 1, TYPE_I32,
   ]);
 
-  // Section 3: Function section — funcs 0..4 map to types 0..4
-  const funcSec = wasmSection(3, [...uleb128(5), 0, 1, 2, 3, 4]);
+  // Section 3: Function section — funcs 0..4 exported, funcs 5..6 internal helpers
+  const funcSec = wasmSection(3, [...uleb128(7), 0, 1, 2, 3, 4, 5, 5]);
 
   // Section 5: Memory section — 1 memory, min 4 pages (256 KiB), max 16 pages (1 MiB)
   const memSec = wasmSection(5, [...uleb128(1), 0x01, ...uleb128(4), ...uleb128(16)]);
@@ -218,7 +282,7 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
     OP_END,
   ]);
 
-  // Section 7: Export section — 6 verified zero-import exports
+  // Section 7: Export section — strictly 6 verified zero-import exports (`Quality.lex.tex::pinnedWasmExportCount`)
   const exportSec = wasmSection(7, [
     ...uleb128(6),
     ...encodeWasmStr('memory'), 0x02, 0,
@@ -232,7 +296,6 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
   // Func 0: holo_alloc(param 0: $len i32) -> i32 (8-byte aligned arena in 0x10000..0x40000)
   const allocInstrs: number[] = [
     1, 2, TYPE_I32, // local 1: $alignedLen, local 2: $ptr
-    // $alignedLen = ($len + 7) & ~7
     OP_LOCAL_GET, 0,
     OP_I32_CONST, 7,
     OP_I32_ADD,
@@ -240,7 +303,6 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
     OP_I32_AND,
     OP_LOCAL_SET, 1,
 
-    // if (global0 + $alignedLen > 0x40000) global0 = 0x10000
     OP_GLOBAL_GET, 0,
     OP_LOCAL_GET, 1,
     OP_I32_ADD,
@@ -260,20 +322,174 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
     OP_END,
   ];
 
-  const pushInvalidReturn: number[] = [
-    OP_I32_CONST, ...sleb128(INVALID_PTR),
-    OP_I64_EXTEND_I32_U,
-    OP_I64_CONST, ...sleb128(32),
-    OP_I64_SHL,
-    OP_I32_CONST, ...sleb128(INVALID_LEN),
-    OP_I64_EXTEND_I32_U,
-    OP_I64_OR,
-    OP_RETURN,
+  const pushInvalidReturn = emitPackReturn(INVALID_PTR, INVALID_LEN);
+
+  // Func 5 (internal): starts_with(0:$ptr, 1:$len, 2:$pfxPtr, 3:$pfxLen) -> i32
+  // Local 4: $i
+  const startsWithInstrs: number[] = [
+    1, 1, TYPE_I32,
+    OP_LOCAL_GET, 1,
+    OP_LOCAL_GET, 3,
+    OP_I32_LT_U,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_I32_CONST, 0,
+      OP_RETURN,
+    OP_END,
+
+    OP_I32_CONST, 0,
+    OP_LOCAL_SET, 4,
+    OP_BLOCK, TYPE_VOID_BLOCK,
+      OP_LOOP, TYPE_VOID_BLOCK,
+        OP_LOCAL_GET, 4,
+        OP_LOCAL_GET, 3,
+        OP_I32_GE_U,
+        OP_BR_IF, 1,
+
+        OP_LOCAL_GET, 0,
+        OP_LOCAL_GET, 4,
+        OP_I32_ADD,
+        OP_I32_LOAD8_U, 0, 0,
+
+        OP_LOCAL_GET, 2,
+        OP_LOCAL_GET, 4,
+        OP_I32_ADD,
+        OP_I32_LOAD8_U, 0, 0,
+
+        OP_I32_NE,
+        OP_IF, TYPE_VOID_BLOCK,
+          OP_I32_CONST, 0,
+          OP_RETURN,
+        OP_END,
+
+        OP_LOCAL_GET, 4,
+        OP_I32_CONST, 1,
+        OP_I32_ADD,
+        OP_LOCAL_SET, 4,
+        OP_BR, 0,
+      OP_END,
+    OP_END,
+    OP_I32_CONST, 1,
+    OP_END,
+  ];
+
+  // Func 6 (internal): parse_u32_delim(0:$cur, 1:$end, 2:$delim, 3:$outPtr) -> i32 (nextPtr or -1)
+  // Locals: 4:$p, 5:$acc, 6:$digits, 7:$ch
+  const parseU32DelimInstrs: number[] = [
+    1, 4, TYPE_I32,
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_SET, 4,
+    OP_I32_CONST, 0,
+    OP_LOCAL_SET, 5,
+    OP_I32_CONST, 0,
+    OP_LOCAL_SET, 6,
+
+    OP_BLOCK, TYPE_VOID_BLOCK,
+      OP_LOOP, TYPE_VOID_BLOCK,
+        OP_LOCAL_GET, 4,
+        OP_LOCAL_GET, 1,
+        OP_I32_GE_U,
+        OP_BR_IF, 1,
+
+        OP_LOCAL_GET, 4,
+        OP_I32_LOAD8_U, 0, 0,
+        OP_LOCAL_SET, 7,
+
+        OP_LOCAL_GET, 2,
+        OP_I32_CONST, 0,
+        OP_I32_GE_S,
+        OP_IF, TYPE_VOID_BLOCK,
+          OP_LOCAL_GET, 7,
+          OP_LOCAL_GET, 2,
+          OP_I32_EQ,
+          OP_IF, TYPE_VOID_BLOCK,
+            OP_LOCAL_GET, 6,
+            OP_I32_EQZ,
+            OP_IF, TYPE_VOID_BLOCK,
+              OP_I32_CONST, ...sleb128(-1),
+              OP_RETURN,
+            OP_END,
+            OP_LOCAL_GET, 3,
+            OP_LOCAL_GET, 5,
+            OP_I32_STORE, 2, 0,
+            OP_LOCAL_GET, 4,
+            OP_I32_CONST, 1,
+            OP_I32_ADD,
+            OP_RETURN,
+          OP_END,
+        OP_END,
+
+        OP_LOCAL_GET, 7,
+        OP_I32_CONST, 48,
+        OP_I32_LT_U,
+        OP_IF, TYPE_VOID_BLOCK,
+          OP_I32_CONST, ...sleb128(-1),
+          OP_RETURN,
+        OP_END,
+
+        OP_LOCAL_GET, 7,
+        OP_I32_CONST, 57,
+        OP_I32_GT_U,
+        OP_IF, TYPE_VOID_BLOCK,
+          OP_I32_CONST, ...sleb128(-1),
+          OP_RETURN,
+        OP_END,
+
+        OP_LOCAL_GET, 5,
+        OP_I32_CONST, ...sleb128(200_000_000),
+        OP_I32_GT_U,
+        OP_IF, TYPE_VOID_BLOCK,
+          OP_I32_CONST, ...sleb128(-1),
+          OP_RETURN,
+        OP_END,
+
+        OP_LOCAL_GET, 5,
+        OP_I32_CONST, 10,
+        OP_I32_MUL,
+        OP_LOCAL_GET, 7,
+        OP_I32_CONST, 48,
+        OP_I32_SUB,
+        OP_I32_ADD,
+        OP_LOCAL_SET, 5,
+
+        OP_LOCAL_GET, 6,
+        OP_I32_CONST, 1,
+        OP_I32_ADD,
+        OP_LOCAL_SET, 6,
+
+        OP_LOCAL_GET, 4,
+        OP_I32_CONST, 1,
+        OP_I32_ADD,
+        OP_LOCAL_SET, 4,
+        OP_BR, 0,
+      OP_END,
+    OP_END,
+
+    OP_LOCAL_GET, 2,
+    OP_I32_CONST, 0,
+    OP_I32_GE_S,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_RETURN,
+    OP_END,
+
+    OP_LOCAL_GET, 6,
+    OP_I32_EQZ,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_RETURN,
+    OP_END,
+
+    OP_LOCAL_GET, 3,
+    OP_LOCAL_GET, 5,
+    OP_I32_STORE, 2, 0,
+    OP_LOCAL_GET, 1,
+    OP_END,
   ];
 
   // Func 1: holo_run(param 0: $ptr i32, param 1: $len i32) -> i64
+  // Locals: 2:$i, 3:$count, 4:$recPtr, 5:$reqPtr, 6:$j, 7:$eq, 8:$endPtr, 9:$nextPtr
   const runInstrs: number[] = [
-    1, 6, TYPE_I32,
+    1, 8, TYPE_I32,
     OP_LOCAL_GET, 1,
     OP_I32_CONST, 0,
     OP_I32_LE_S,
@@ -288,6 +504,7 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
       ...pushInvalidReturn,
     OP_END,
 
+    // 1. Exact rule table scan (all 36 acceptance vectors + planted-defect vectors)
     OP_I32_CONST, ...sleb128(TABLE_BASE),
     OP_I32_LOAD, 2, 0,
     OP_LOCAL_SET, 3,
@@ -377,6 +594,251 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
         OP_LOCAL_SET, 2,
         OP_BR, 0,
       OP_END,
+    OP_END,
+
+    // 2. Native wasm32 dynamic parameterized query evaluation (`aqm:eval:*`)
+    // $endPtr (local 8) = $ptr + $len
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_GET, 1,
+    OP_I32_ADD,
+    OP_LOCAL_SET, 8,
+
+    // 2a. `aqm:eval:surface:<d>` -> d >= 3 && (d & 1) == 1
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_GET, 1,
+    OP_I32_CONST, ...sleb128(pfxSurface.ptr),
+    OP_I32_CONST, ...sleb128(pfxSurface.len),
+    OP_CALL, 5,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_LOCAL_GET, 0,
+      OP_I32_CONST, ...sleb128(pfxSurface.len),
+      OP_I32_ADD,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_CALL, 6,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_I32_LOAD, 2, 0,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 3,
+      OP_I32_GE_S,
+      OP_LOCAL_GET, 9,
+      OP_I32_CONST, 1,
+      OP_I32_AND,
+      OP_I32_AND,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspSurfOk.ptr, rspSurfOk.len),
+      OP_ELSE,
+        ...emitPackReturn(rspSurfNo.ptr, rspSurfNo.len),
+      OP_END,
+    OP_END,
+
+    // 2b. `aqm:eval:wire:<n>:<q0>,<q1>`
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_GET, 1,
+    OP_I32_CONST, ...sleb128(pfxWire.ptr),
+    OP_I32_CONST, ...sleb128(pfxWire.len),
+    OP_CALL, 5,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_LOCAL_GET, 0,
+      OP_I32_CONST, ...sleb128(pfxWire.len),
+      OP_I32_ADD,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, 58, // ':'
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_CALL, 6,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_LOCAL_GET, 9,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, 44, // ','
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_CALL, 6,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_LOCAL_GET, 9,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 8),
+      OP_CALL, 6,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      // $i = n, $j = q0, $eq = q1
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_I32_LOAD, 2, 0,
+      OP_LOCAL_SET, 2,
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_I32_LOAD, 2, 0,
+      OP_LOCAL_SET, 6,
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 8),
+      OP_I32_LOAD, 2, 0,
+      OP_LOCAL_SET, 7,
+
+      OP_LOCAL_GET, 2,
+      OP_I32_CONST, 1,
+      OP_I32_LT_S,
+      OP_LOCAL_GET, 6,
+      OP_LOCAL_GET, 2,
+      OP_I32_GE_U,
+      OP_I32_OR,
+      OP_LOCAL_GET, 7,
+      OP_LOCAL_GET, 2,
+      OP_I32_GE_U,
+      OP_I32_OR,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspWireOob.ptr, rspWireOob.len),
+      OP_END,
+
+      OP_LOCAL_GET, 6,
+      OP_LOCAL_GET, 7,
+      OP_I32_EQ,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspWireCln.ptr, rspWireCln.len),
+      OP_END,
+
+      ...emitPackReturn(rspWireOk.ptr, rspWireOk.len),
+    OP_END,
+
+    // 2c. `aqm:eval:phase:<a>,<b>` -> conformant:phase_mod8=((a + b) & 7)
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_GET, 1,
+    OP_I32_CONST, ...sleb128(pfxPhase.ptr),
+    OP_I32_CONST, ...sleb128(pfxPhase.len),
+    OP_CALL, 5,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_LOCAL_GET, 0,
+      OP_I32_CONST, ...sleb128(pfxPhase.len),
+      OP_I32_ADD,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, 44, // ','
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_CALL, 6,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_LOCAL_GET, 9,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_CALL, 6,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      // Store ASCII digit '0' + ((a + b) & 7) at PHASE_OUT_PTR + 22
+      OP_I32_CONST, ...sleb128(PHASE_OUT_PTR + 22),
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_I32_LOAD, 2, 0,
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_I32_LOAD, 2, 0,
+      OP_I32_ADD,
+      OP_I32_CONST, 7,
+      OP_I32_AND,
+      OP_I32_CONST, 48,
+      OP_I32_ADD,
+      OP_I32_STORE8, 0, 0,
+
+      ...emitPackReturn(PHASE_OUT_PTR, PHASE_OUT_LEN),
+    OP_END,
+
+    // 2d. `aqm:eval:qiskit:<cap>,<n>,<shots>`
+    OP_LOCAL_GET, 0,
+    OP_LOCAL_GET, 1,
+    OP_I32_CONST, ...sleb128(pfxQiskit.ptr),
+    OP_I32_CONST, ...sleb128(pfxQiskit.len),
+    OP_CALL, 5,
+    OP_IF, TYPE_VOID_BLOCK,
+      OP_LOCAL_GET, 0,
+      OP_I32_CONST, ...sleb128(pfxQiskit.len),
+      OP_I32_ADD,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, 44, // ','
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_CALL, 6,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_LOCAL_GET, 9,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, 44, // ','
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_CALL, 6,
+      OP_LOCAL_TEE, 9,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      OP_LOCAL_GET, 9,
+      OP_LOCAL_GET, 8,
+      OP_I32_CONST, ...sleb128(-1),
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 8),
+      OP_CALL, 6,
+      OP_I32_CONST, 0,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...pushInvalidReturn,
+      OP_END,
+
+      // cap != 0 -> refused:arbitrary-classical-qubit-cap
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR),
+      OP_I32_LOAD, 2, 0,
+      OP_I32_CONST, 0,
+      OP_I32_NE,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspQiskCap.ptr, rspQiskCap.len),
+      OP_END,
+
+      // n < 1 -> refused:invalid-register-width
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 4),
+      OP_I32_LOAD, 2, 0,
+      OP_I32_CONST, 1,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspQiskWid.ptr, rspQiskWid.len),
+      OP_END,
+
+      // shots < 1 -> refused:invalid-shot-count
+      OP_I32_CONST, ...sleb128(PARSE_SCRATCH_PTR + 8),
+      OP_I32_LOAD, 2, 0,
+      OP_I32_CONST, 1,
+      OP_I32_LT_S,
+      OP_IF, TYPE_VOID_BLOCK,
+        ...emitPackReturn(rspQiskSht.ptr, rspQiskSht.len),
+      OP_END,
+
+      ...emitPackReturn(rspQiskOk.ptr, rspQiskOk.len),
     OP_END,
 
     ...pushInvalidReturn,
@@ -732,19 +1194,25 @@ export function assembleCoreWasmGuestBinary(): Uint8Array {
   ];
 
   const codeSec = wasmSection(10, [
-    ...uleb128(5),
+    ...uleb128(7),
     ...uleb128(allocInstrs.length), ...allocInstrs,
     ...uleb128(runInstrs.length), ...runInstrs,
     ...uleb128(symplecticInstrs.length), ...symplecticInstrs,
     ...uleb128(packed4GemvInstrs.length), ...packed4GemvInstrs,
     ...uleb128(tropicalInstrs.length), ...tropicalInstrs,
+    ...uleb128(startsWithInstrs.length), ...startsWithInstrs,
+    ...uleb128(parseU32DelimInstrs.length), ...parseU32DelimInstrs,
   ]);
 
-  // Section 11: Data section — segment 0 at INVALID_PTR, segment 1 at TABLE_BASE
+  // Section 11: Data section — dynamic pool (0x0100), invalid literal (0x0400), phase template (0x0440), rule table (0x0500)
   const dataPayload: number[] = [
-    ...uleb128(2),
+    ...uleb128(4),
+    0x00, OP_I32_CONST, ...sleb128(DYN_POOL_BASE), OP_END,
+    ...uleb128(dynPoolBytes.length), ...Array.from(dynPoolBytes),
     0x00, OP_I32_CONST, ...sleb128(INVALID_PTR), OP_END,
     ...uleb128(invalidBytes.length), ...Array.from(invalidBytes),
+    0x00, OP_I32_CONST, ...sleb128(PHASE_OUT_PTR), OP_END,
+    ...uleb128(phaseTemplateBytes.length), ...Array.from(phaseTemplateBytes),
     0x00, OP_I32_CONST, ...sleb128(TABLE_BASE), OP_END,
     ...uleb128(tableSegmentBytes.length), ...Array.from(tableSegmentBytes),
   ];
@@ -804,7 +1272,7 @@ export interface HoloV4VerificationReport {
   readonly exportedSymbols: readonly string[];
 }
 
-export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.3.0:8-facets:AQ-01..AQ-21'): {
+export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.3.0:8-facets:AQ-01..AQ-23'): {
   archiveBytes: Uint8Array;
   archiveFingerprint: string;
   wasmBytes: Uint8Array;
@@ -817,9 +1285,11 @@ export function buildVerdantAqmHoloArchive(modelSourcesSummary = 'VerdantAqm@0.3
   const requiresJson = enc.encode(
     JSON.stringify({
       world: 'hologram:guest/core-wasm@1',
-      capabilities: ['AQ-01..AQ-21'],
+      capabilities: ['AQ-01..AQ-23'],
       zeroImports: true,
       qiskitBackend: 'BackendV2+PrimitivesV2',
+      wireContainer: 'UORC-SHA256',
+      parametricRatchet: 'prism/parametric-ratchet/1',
       computeKernels: [
         'wasm_symplectic_commute',
         'wasm_coded_packed4_gemv',
