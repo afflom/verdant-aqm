@@ -616,6 +616,77 @@ class TestAuthoritativeQiskitOracle(unittest.TestCase):
         self.assertEqual(hop_out[2], 1)
         self.assertGreaterEqual(relaxes, 1)
 
+    def test_23_execute_all_generated_ipynb_notebooks_in_python(self) -> None:
+        import types
+        from qiskit_verdant_aqm import HAS_UPSTREAM_QISKIT
+
+        notebooks_dir = REPO_ROOT / "notebooks"
+        nb_files = sorted(notebooks_dir.glob("*.ipynb"))
+        self.assertGreaterEqual(len(nb_files), 3)
+
+        saved_modules: dict[str, object] = {}
+        shim_names = ("qiskit", "qiskit.circuit", "qiskit.quantum_info")
+        if not HAS_UPSTREAM_QISKIT:
+            for mname in shim_names:
+                if mname in sys.modules:
+                    saved_modules[mname] = sys.modules[mname]
+
+            qiskit_mod = types.ModuleType("qiskit")
+            qiskit_mod.QuantumCircuit = QuantumCircuit  # type: ignore[attr-defined]
+            qiskit_mod.QuantumRegister = QuantumRegister  # type: ignore[attr-defined]
+            qiskit_mod.ClassicalRegister = ClassicalRegister  # type: ignore[attr-defined]
+            qiskit_mod.transpile = lambda qc, **_kw: qc  # type: ignore[attr-defined]
+
+            circuit_mod = types.ModuleType("qiskit.circuit")
+            circuit_mod.Parameter = Parameter  # type: ignore[attr-defined]
+            circuit_mod.QuantumCircuit = QuantumCircuit  # type: ignore[attr-defined]
+            circuit_mod.QuantumRegister = QuantumRegister  # type: ignore[attr-defined]
+            circuit_mod.ClassicalRegister = ClassicalRegister  # type: ignore[attr-defined]
+
+            qi_mod = types.ModuleType("qiskit.quantum_info")
+            qi_mod.SparsePauliOp = SparsePauliOp  # type: ignore[attr-defined]
+
+            qiskit_mod.circuit = circuit_mod  # type: ignore[attr-defined]
+            qiskit_mod.quantum_info = qi_mod  # type: ignore[attr-defined]
+            sys.modules["qiskit"] = qiskit_mod
+            sys.modules["qiskit.circuit"] = circuit_mod
+            sys.modules["qiskit.quantum_info"] = qi_mod
+
+        try:
+            executed_code_cells = 0
+            for nb_path in nb_files:
+                nb_doc = json.loads(nb_path.read_text(encoding="utf-8"))
+                self.assertEqual(nb_doc["nbformat"], 4)
+                self.assertEqual(nb_doc["nbformat_minor"], 5)
+                self.assertEqual(nb_doc["metadata"]["kernelspec"]["name"], "python3")
+                self.assertEqual(nb_doc["metadata"]["kernelspec"]["language"], "python")
+
+                ns: dict[str, object] = {"__name__": "__main__"}
+                for cell in nb_doc["cells"]:
+                    if cell["cell_type"] != "code":
+                        continue
+                    src = "".join(cell["source"]) if isinstance(cell["source"], list) else str(cell["source"])
+                    code_obj = compile(src, f"{nb_path.name}#{cell.get('id', 'cell')}", "exec")
+                    exec(code_obj, ns, ns)  # noqa: S102 - executes deterministic repository notebooks under test
+                    executed_code_cells += 1
+                    if "job" in ns and hasattr(ns["job"], "result"):
+                        job_res = ns["job"].result()  # type: ignore[attr-defined]
+                        self.assertGreaterEqual(len(job_res), 1)
+                    if "counts" in ns:
+                        self.assertIsInstance(ns["counts"], dict)
+                        self.assertGreater(sum(ns["counts"].values()), 0)  # type: ignore[arg-type]
+                    if "pub_res" in ns:
+                        pub_counts = ns["pub_res"].data.meas.get_counts()  # type: ignore[attr-defined]
+                        self.assertEqual(sum(pub_counts.values()), 1024)
+            self.assertEqual(executed_code_cells, 9)
+        finally:
+            if not HAS_UPSTREAM_QISKIT:
+                for mname in shim_names:
+                    if mname in saved_modules:
+                        sys.modules[mname] = saved_modules[mname]  # type: ignore[assignment]
+                    else:
+                        sys.modules.pop(mname, None)
+
 
 if __name__ == "__main__":
     unittest.main()

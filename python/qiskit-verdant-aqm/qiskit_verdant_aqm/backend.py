@@ -29,7 +29,6 @@ from .uorc_wire import compress_uorc_portable, decompress_uorc_portable
 
 try:
     from qiskit.circuit import (  # type: ignore[import-not-found]
-        Barrier as _QiskitBarrier,
         Measure as _QiskitMeasure,
         Parameter as _QiskitParameter,
         QuantumCircuit as _UpstreamQuantumCircuit,
@@ -478,7 +477,6 @@ def _build_upstream_qiskit_target() -> Any:
     ]
     for gate in global_ops:
         target.add_instruction(gate, {None: None})
-    target.add_instruction(_QiskitBarrier, name="barrier")
     return target
 
 
@@ -1925,7 +1923,7 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
                 substrate="auto",
                 weave_atlas=False,
             )
-            opts.set_validator("shots", (1, None))
+            opts.set_validator("shots", int)
             return opts
         return _FallbackOptions()
 
@@ -1957,11 +1955,19 @@ class VerdantAqmBackend(_BaseBackendV2):  # type: ignore[misc]
     def set_options(self, **fields: Any) -> None:
         if "max_shots" in fields:
             self._max_shots = fields.pop("max_shots")
-            if HAS_UPSTREAM_QISKIT and self._max_shots is not None:
-                self._options.set_validator("shots", (1, int(self._max_shots)))
+            if HAS_UPSTREAM_QISKIT:
+                if self._max_shots is not None:
+                    self._options.set_validator("shots", (1, int(self._max_shots)))
+                else:
+                    self._options.set_validator("shots", int)
         if "shots" in fields:
             shots = fields["shots"]
-            if not isinstance(shots, int) or shots < 1 or (self._max_shots is not None and shots > self._max_shots):
+            if (
+                isinstance(shots, bool)
+                or not isinstance(shots, int)
+                or shots < 1
+                or (self._max_shots is not None and shots > self._max_shots)
+            ):
                 bound_msg = f" and <={self._max_shots}" if self._max_shots is not None else ""
                 raise ValueError(
                     f"Specified value for 'shots' is not a valid value, must be >=1{bound_msg}"

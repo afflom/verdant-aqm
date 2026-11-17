@@ -2822,9 +2822,13 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   try {
     const trimmed = source.trim();
-    if (/^OPENQASM\b/i.test(trimmed)) {
-      const qc = parseOpenQasmToQiskitCircuit(trimmed, 'qasm_cell');
-      const backend = new VerdantAqmBackend({ shots: 1024, seed_simulator: 42, memory: true });
+    const tripleQuotedQasmMatch = /(?:"""|''')([\s\S]*?OPENQASM\b[\s\S]*?)(?:"""|''')/i.exec(trimmed);
+    if (/^OPENQASM\b/i.test(trimmed) || tripleQuotedQasmMatch) {
+      const qasmSource = tripleQuotedQasmMatch ? tripleQuotedQasmMatch[1].trim() : trimmed;
+      const qasmShots = Number(/shots\s*=\s*(\d+)/.exec(trimmed)?.[1] ?? 1024);
+      const qasmSeed = Number(/seed(?:_simulator)?\s*=\s*(\d+)/.exec(trimmed)?.[1] ?? 42);
+      const qc = parseOpenQasmToQiskitCircuit(qasmSource, 'qasm_cell');
+      const backend = new VerdantAqmBackend({ shots: qasmShots, seed_simulator: qasmSeed, memory: true });
       const res = backend.run(qc).result();
       const exp = res.results[0];
       const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;

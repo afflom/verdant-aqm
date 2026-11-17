@@ -60,7 +60,7 @@ class SparsePauliOp:
         if len(labels) != len(coeffs):
             raise ValueError("SparsePauliOp labels and coeffs length mismatch.")
         self.paulis = [str(lbl).upper() for lbl in labels]
-        self.coeffs = [float(c.real if isinstance(c, complex) else c) for c in coeffs]
+        self.coeffs = [float(c.real if hasattr(c, "real") else c) for c in coeffs]
 
     @classmethod
     def from_list(cls, items: Sequence[tuple[str, float | complex]]) -> SparsePauliOp:
@@ -358,9 +358,9 @@ def _normalize_obs_terms(obs: Any) -> list[tuple[str, float]]:
     if isinstance(obs, str):
         return [(obs, 1.0)]
     if hasattr(obs, "to_list"):
-        return [(str(lbl), float(c.real if isinstance(c, complex) else c)) for lbl, c in obs.to_list()]
+        return [(str(lbl), float(c.real if hasattr(c, "real") else c)) for lbl, c in obs.to_list()]
     if isinstance(obs, (list, tuple)) and obs and isinstance(obs[0], (list, tuple)) and len(obs[0]) == 2:
-        return [(str(lbl), float(c)) for lbl, c in obs]
+        return [(str(lbl), float(c.real if hasattr(c, "real") else c)) for lbl, c in obs]
     raise TypeError(f"Unsupported observable specification: {obs!r}")
 
 
