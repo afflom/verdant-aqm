@@ -1,21 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Play, Plus, RotateCcw } from 'lucide-react';
 
-import qiskitWorkflowRaw from '@/.github/workflows/qiskit.yml?raw';
 import rawExplanationMd from '@/docs/explanation/prism-substrates-and-honesty-gates.md?raw';
 import rawHowToMd from '@/docs/how-to/unbounded-megascale-and-aer-migration.md?raw';
 import rawHubMd from '@/docs/index.md?raw';
 import rawReferenceMd from '@/docs/reference/qiskit-backend-v2-and-primitives-api.md?raw';
 import rawTutorialMd from '@/docs/tutorials/01-quickstart-qiskit-backend.md?raw';
-import pyProjectTomlRaw from '@/python/qiskit-verdant-aqm/pyproject.toml?raw';
-import pyReadmeRaw from '@/python/qiskit-verdant-aqm/README.md?raw';
-import pyAtlasUtqcRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/atlas_utqc.py?raw';
-import pyBackendRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/backend.py?raw';
-import pyHoloBridgeRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/holo_bridge.py?raw';
-import pyPrimitivesRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/primitives.py?raw';
-import pyProviderRaw from '@/python/qiskit-verdant-aqm/qiskit_verdant_aqm/provider.py?raw';
-import pyTestOracleRaw from '@/python/qiskit-verdant-aqm/tests/test_qiskit_oracle.py?raw';
-import upstreamTomlRaw from '@/upstream.toml?raw';
 import rawVendorContent from '@/vendor/qiskit-oracle/content.json?raw';
 import rawVendorGate from '@/vendor/qiskit-oracle/devrel-publish-gate.prompt.json?raw';
 import rawVendorStandard from '@/vendor/qiskit-oracle/standard.json?raw';
@@ -23,6 +13,7 @@ import rawVendorEstimator from '@/vendor/qiskit-oracle/test_backend_estimator_v2
 import rawVendorSampler from '@/vendor/qiskit-oracle/test_backend_sampler_v2.py?raw';
 import rawVendorBackendV2 from '@/vendor/qiskit-oracle/test_backend_v2.py?raw';
 import rawVendorBasicSim from '@/vendor/qiskit-oracle/test_basic_simulator.py?raw';
+import type { PythonSdkSourceEntry } from '../aqm/pythonSdkBundle';
 
 import {
   ALL_CAPABILITY_IDS,
@@ -68,74 +59,6 @@ const GUIDE_MARKDOWN_MAP: Readonly<Record<string, string>> = {
   'docs/reference/qiskit-backend-v2-and-primitives-api.md': rawReferenceMd,
   'docs/explanation/prism-substrates-and-honesty-gates.md': rawExplanationMd,
 };
-
-const PYTHON_SDK_FILES: ReadonlyArray<{
-  readonly key: string;
-  readonly label: string;
-  readonly downloadName: string;
-  readonly content: string;
-}> = [
-  {
-    key: 'pyproject',
-    label: 'pyproject.toml',
-    downloadName: 'pyproject.toml',
-    content: pyProjectTomlRaw,
-  },
-  {
-    key: 'backend',
-    label: 'qiskit_verdant_aqm/backend.py',
-    downloadName: 'backend.py',
-    content: pyBackendRaw,
-  },
-  {
-    key: 'primitives',
-    label: 'qiskit_verdant_aqm/primitives.py',
-    downloadName: 'primitives.py',
-    content: pyPrimitivesRaw,
-  },
-  {
-    key: 'provider',
-    label: 'qiskit_verdant_aqm/provider.py',
-    downloadName: 'provider.py',
-    content: pyProviderRaw,
-  },
-  {
-    key: 'atlas-utqc',
-    label: 'qiskit_verdant_aqm/atlas_utqc.py',
-    downloadName: 'atlas_utqc.py',
-    content: pyAtlasUtqcRaw,
-  },
-  {
-    key: 'holo-bridge',
-    label: 'qiskit_verdant_aqm/holo_bridge.py',
-    downloadName: 'holo_bridge.py',
-    content: pyHoloBridgeRaw,
-  },
-  {
-    key: 'oracle-test',
-    label: 'tests/test_qiskit_oracle.py',
-    downloadName: 'test_qiskit_oracle.py',
-    content: pyTestOracleRaw,
-  },
-  {
-    key: 'upstream',
-    label: 'upstream.toml',
-    downloadName: 'upstream.toml',
-    content: upstreamTomlRaw,
-  },
-  {
-    key: 'workflow',
-    label: '.github/workflows/qiskit.yml',
-    downloadName: 'qiskit.yml',
-    content: qiskitWorkflowRaw,
-  },
-  {
-    key: 'readme',
-    label: 'python/README.md',
-    downloadName: 'README.md',
-    content: pyReadmeRaw,
-  },
-];
 
 /** Faceted geometric prism avatar modeled after `afflom/prism-devrel/scripts/content/guides.mjs` */
 const PrismPersonaGlyph: React.FC<{ personaId: DevRelPersonaId }> = ({ personaId }) => {
@@ -189,7 +112,21 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
   );
   const [selectedGuideId, setSelectedGuideId] = useState<string>('hub');
   const [selectedSdkKey, setSelectedSdkKey] = useState<string>('pyproject');
+  const [sdkFiles, setSdkFiles] = useState<readonly PythonSdkSourceEntry[]>([]);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (subTab !== 'sdk-docs' || sdkFiles.length > 0) return;
+    let active = true;
+    void import('../aqm/pythonSdkBundle').then((mod) => {
+      if (active) {
+        setSdkFiles(mod.PYTHON_SDK_FILES);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [subTab, sdkFiles.length]);
 
   const devrelAudit = useMemo(
     () => runDevRelContentAndPublishGateAudit(GUIDE_MARKDOWN_MAP, VENDORED_ORACLE_PAYLOADS),
@@ -313,7 +250,13 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
     DIATAXIS_GUIDE_META.find((g) => g.id === selectedGuideId) ?? DIATAXIS_GUIDE_META[0];
   const activeGuideMarkdown = GUIDE_MARKDOWN_MAP[activeGuideMeta.path] ?? '';
   const activeSdkFile =
-    PYTHON_SDK_FILES.find((f) => f.key === selectedSdkKey) ?? PYTHON_SDK_FILES[0];
+    sdkFiles.find((f) => f.key === selectedSdkKey) ??
+    sdkFiles[0] ?? {
+      key: 'loading',
+      label: 'Loading Python SDK sources…',
+      downloadName: 'pyproject.toml',
+      content: '# Loading Python SDK sources…',
+    };
 
   let codeCellCounter = 0;
 
@@ -331,7 +274,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
             <span>num_qubits=None (Unbounded)</span>
             <span aria-hidden="true"> · </span>
             <span className="text-emerald-700 dark:text-emerald-400">
-              ● Oracle {oracleReport.passedCount}/{oracleReport.totalCount} PASS
+              Oracle: {oracleReport.passedCount}/{oracleReport.totalCount} PASS
             </span>
             <span aria-hidden="true"> · </span>
             <span className="text-emerald-700 dark:text-emerald-400">
@@ -354,7 +297,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
             {(
               [
                 ['notebooks', 'Jupyter Notebook Lab (.ipynb)'],
-                ['oracle', 'Authoritative Qiskit Oracle (16)'],
+                ['oracle', `Authoritative Qiskit Oracle (${oracleReport.totalCount})`],
                 ['sdk-docs', 'Python SDK & Diataxis Guides'],
               ] as const
             ).map(([id, label]) => (
@@ -715,7 +658,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
                               : 'text-rose-600 dark:text-rose-400 font-semibold'
                           }
                         >
-                          {f.verified ? '● SHA-256 Verified' : '✖ Mismatch'}
+                          {f.verified ? 'SHA-256 Verified' : 'Mismatch'}
                         </span>
                       </td>
                     </tr>
@@ -767,7 +710,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
                               : 'text-rose-600 dark:text-rose-400 font-semibold'
                           }
                         >
-                          {c.passed ? `● PASS (${c.elapsedMs.toFixed(1)}ms)` : '✖ FAIL'}
+                          {c.passed ? `PASS (${c.elapsedMs.toFixed(1)}ms)` : 'FAIL'}
                         </span>
                       </td>
                     </tr>
@@ -828,30 +771,30 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
                 </p>
               </div>
               <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
-                ● Verdict: {devrelAudit.gateVerdict.toUpperCase()} (AQ-21)
+                Verdict: {devrelAudit.gateVerdict.toUpperCase()} (AQ-21)
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+              <div>
                 <div className="text-slate-500">Capability Coverage</div>
                 <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400">
                   {devrelAudit.coveredCapabilities.length} / {ALL_CAPABILITY_IDS.length} (uncovered={devrelAudit.uncoveredCapabilities.length})
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div>
                 <div className="text-slate-500">CS-10 Banned Filler Words</div>
                 <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
                   {devrelAudit.fillerViolations.length} violations
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div>
                 <div className="text-slate-500">CS-09 Vague Link Labels</div>
                 <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
                   {devrelAudit.vagueLinkViolations.length} violations
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div>
                 <div className="text-slate-500">Upstream Oracle Pin</div>
                 <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400">
                   {devrelAudit.upstreamPinStatus} (7/7 SHA-256)
@@ -939,7 +882,7 @@ export const QiskitNotebookPanel: React.FC<QiskitNotebookPanelProps> = ({
               </div>
 
               <div className="flex flex-wrap gap-1.5">
-                {PYTHON_SDK_FILES.map((item) => (
+                {sdkFiles.map((item) => (
                   <button
                     key={item.key}
                     type="button"

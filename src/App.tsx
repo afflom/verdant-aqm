@@ -59,7 +59,27 @@ const cyberneticLoop = new CyberneticObserverLoop();
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(true);
-  const [workspace, setWorkspace] = useState<ActiveWorkspace>('studio');
+  const [workspace, setWorkspace] = useState<ActiveWorkspace>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const q = params.get('workspace');
+      const valid: readonly ActiveWorkspace[] = [
+        'studio',
+        'qiskit',
+        'circuit',
+        'atlas-qec',
+        'verifier',
+      ];
+      if (q && (valid as readonly string[]).includes(q)) {
+        return q as ActiveWorkspace;
+      }
+      const h = window.location.hash.replace(/^#/, '');
+      if ((valid as readonly string[]).includes(h)) {
+        return h as ActiveWorkspace;
+      }
+    }
+    return 'studio';
+  });
   const [atlasQecMode, setAtlasQecMode] = useState<'atlas' | 'qec'>('atlas');
 
   // Initialize from #uorc= (or legacy #vdnt=) URL hash if present, else canonical 3-Qubit GHZ + T manifold
@@ -345,8 +365,8 @@ export default function App() {
           <span aria-hidden="true">·</span>
           <span className="text-emerald-700 dark:text-emerald-400">
             {activeFrame?.conservation.normExactOne
-              ? `● Norm ${activeFrame.conservation.rationalNumerator}/${activeFrame.conservation.scaleDenominator}`
-              : '▲ Check Norm'}
+              ? `Norm ${activeFrame.conservation.rationalNumerator}/${activeFrame.conservation.scaleDenominator}`
+              : 'Norm Check Required'}
           </span>
           <span aria-hidden="true">·</span>
           <span>
@@ -687,8 +707,8 @@ export default function App() {
                       }`}
                     >
                       {slmFeedback.admitted
-                        ? `● Admitted (${slmFeedback.matchedTitle} · coded_gemm=${slmFeedback.codedGemmScore}) — Prism invariants verified.`
-                        : `✖ Denied by Prism Guard (${slmFeedback.refusalError?.kind}) — ${slmFeedback.refusalError?.detail}`}
+                        ? `Admitted (${slmFeedback.matchedTitle} · coded_gemm=${slmFeedback.codedGemmScore}) — Prism invariants verified.`
+                        : `Denied by Prism Guard (${slmFeedback.refusalError?.kind}) — ${slmFeedback.refusalError?.detail}`}
                     </div>
                   )}
                 </div>

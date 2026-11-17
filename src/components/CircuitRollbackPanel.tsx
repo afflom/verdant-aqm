@@ -785,8 +785,8 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   k14 Norm Conservation & Tensor Bond Ranks
                 </h2>
-                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
-                  {activeFrame.conservation.normExactOne ? '● Exact Norm = 1' : '✖ Violated'}
+                <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                  {activeFrame.conservation.normExactOne ? 'Exact Norm = 1' : 'Violated'}
                 </span>
               </div>
 
@@ -928,8 +928,8 @@ export const CircuitRollbackPanel: React.FC<CircuitRollbackPanelProps> = ({
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   Active F₂ Stabilizer Generators (Word-Packed)
                 </h2>
-                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
-                  {activeFrame.stabilizersCommute ? '● Pairwise Commuting' : '✖ Anticommuting'}
+                <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                  {activeFrame.stabilizersCommute ? 'Pairwise Commuting' : 'Anticommuting'}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-xs tabular-nums max-h-64 overflow-y-auto">

@@ -13,6 +13,7 @@ import qualityLexRaw from '@/app/src/Quality.lex.tex?raw';
 import quantumLexRaw from '@/app/src/Quantum.lex.tex?raw';
 import securityLexRaw from '@/app/src/Security.lex.tex?raw';
 import rustLibRaw from '@/crates/verdant-aqm/src/lib.rs?raw';
+import rustSaturationRaw from '@/crates/verdant-aqm/src/saturation.rs?raw';
 import rustUorcRaw from '@/crates/verdant-aqm/src/uorc.rs?raw';
 import ratchetTomlRaw from '@/model/parametric-ratchet.toml?raw';
 
@@ -22,6 +23,7 @@ export {
   foundationBytesLexRaw,
   ontologyRootLexRaw,
   ratchetTomlRaw,
+  rustSaturationRaw,
   rustUorcRaw,
 };
 
@@ -41,6 +43,8 @@ export const BUNDLED_RATCHET_WORKSPACE: RatchetWorkspaceSnapshot = {
   },
   rustFilesByPath: {
     'crates/verdant-aqm/src/lib.rs': rustLibRaw,
+    'crates/verdant-aqm/src/saturation.rs': rustSaturationRaw,
     'crates/verdant-aqm/src/uorc.rs': rustUorcRaw,
   },
 };
+

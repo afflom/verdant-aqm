@@ -66,6 +66,7 @@ jobs:
               VerdantAqmEstimatorV2,
               VerdantAqmProvider,
               VerdantAqmSamplerV2,
+              prove_host_saturation,
           )
 
           assert HAS_UPSTREAM_QISKIT, "Expected upstream qiskit>=1.0 to be active"
@@ -86,13 +87,25 @@ jobs:
           counts = backend.run(isa_qc, shots=256, seed_simulator=42).result().get_counts()
           assert set(counts.keys()).issubset({"00", "11"}) and sum(counts.values()) == 256
 
+          # Verify 1,000q non-Clifford disjoint tensor factorization & host roofline saturation proof
+          disj = QuantumCircuit(1000, 2)
+          for pair in range(0, 1000, 2):
+              disj.ry(0.618, pair)
+              disj.cx(pair, pair + 1)
+              disj.t(pair)
+          disj.measure([0, 999], [0, 1])
+          disj_res = backend.run(transpile(disj, backend=backend), shots=128, seed_simulator=42).result()
+          assert disj_res.results[0].metadata["substrate"] == "DisjointProductState"
+          sat_proof = prove_host_saturation()
+          assert sat_proof["optimal_saturation_verified"] is True
+
           # Verify upstream SparsePauliOp with VerdantAqmEstimatorV2
           singlet = QuantumCircuit(2)
           singlet.x(0); singlet.x(1); singlet.h(0); singlet.cx(0, 1)
           op = SparsePauliOp.from_list([("XX", 1.0), ("YY", 1.0), ("ZZ", 1.0)])
           ev = VerdantAqmEstimatorV2(default_precision=0.0).run([(singlet, op)]).result()[0].data.evs
           assert abs(ev - (-3.0)) < 1e-13
-          print("Upstream Qiskit integration & 4,096q transpile PASS")
+          print("Upstream Qiskit integration, 4,096q Cat & 1,000q DisjointProductState PASS")
           PY
 
       - name: Execute all prism-devrel Jupyter .ipynb notebooks via nbconvert

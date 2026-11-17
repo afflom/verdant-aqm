@@ -39,6 +39,10 @@ export default defineConfig(({command}) => {
                 name: 'vendor-three',
                 test: /node_modules[\\/]three/,
               },
+              {
+                name: 'vendor-react',
+                test: /node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+              },
             ],
           },
         },

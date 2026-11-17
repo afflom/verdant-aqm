@@ -89,6 +89,6 @@ if (isMain) {
     process.exit(1);
   }
   console.log(
-    `parametric-ratchet: PASS · spec=${report.spec} · ceilings=0/0 · grounded_lex=${report.groundedLexModuleCount} · rust_files=${report.auditedRustFileCount} · planted_gates=${planted.casesVerified}/${planted.casesVerified}`,
+    `parametric-ratchet: PASS · spec=${report.spec} · ceilings=0/0 · grounded_lex=${report.groundedLexModuleCount} · rust_files=${report.auditedRustFileCount} · perf_tiers=${report.performanceSaturation.optimizationTiersVerified}/${report.performanceSaturation.optimizationTiersTotal} · planted_gates=${planted.casesVerified}/${planted.casesVerified}`,
   );
 }

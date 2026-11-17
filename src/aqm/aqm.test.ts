@@ -727,10 +727,10 @@ test('AQ-19, AQ-20 & AQ-21: Production Qiskit BackendV2, Primitives V2, Upstream
   assert.deepEqual(PRISM_DEVREL_BANNED_FILLER, vendoredStandard.fillers);
   assert.deepEqual(PRISM_DEVREL_VAGUE_LINKS, vendoredStandard.vagueLinks);
 
-  // 2. Run all 16 authoritative Qiskit BackendV2, BasicSimulator, SamplerV2, and EstimatorV2 oracle cases
+  // 2. Run all 17 authoritative Qiskit BackendV2, BasicSimulator, SamplerV2, EstimatorV2 & inv017 oracle cases
   const oracleReport = runAuthoritativeQiskitOracleSuite(rawPayloads);
   assert.equal(oracleReport.allProvenanceVerified, true);
-  assert.equal(oracleReport.totalCount, 16);
+  assert.equal(oracleReport.totalCount, 17);
   for (const c of oracleReport.cases) {
     assert.equal(c.passed, true, `Oracle case ${c.id} (${c.upstreamTestName}) failed: ${c.detail}`);
   }
@@ -980,7 +980,7 @@ test('AQ-22 & AQ-23: Pure UORC post-boot wire, CDMX zero-decode, Qiskit Result U
 
   const plantedRatchet = verifyParametricRatchetPlantedDefects(loadDiskRatchetWorkspace());
   assert.equal(plantedRatchet.allCaughtAndRestored, true);
-  assert.equal(plantedRatchet.casesVerified, 6);
+  assert.equal(plantedRatchet.casesVerified, 8);
 });
 
 test('Zero-limits Prism & Qiskit refinement: 64q 2^64-ket ExactMps, 512q mid-circuit reset, 10,000q Clifford EstimatorV2, k=2000 Hadamard & 600-step rollback', async () => {
@@ -1310,3 +1310,180 @@ test('Zero-stubs completion: native wasm32 dynamic aqm:eval:* queries, Wasm-back
   assert.ok(nbAdv.stdoutLines.some((l) => l.includes('SkWeaver PU(22) max projective residual')));
   assert.ok(nbAdv.stdoutLines.some((l) => l.includes('UORC lossless custody round-trip')));
 });
+
+test('inv017 Host Resource Saturation, 8/8 Parametric Ratchet, CSR Tile Rasterizer, Codebook LUT & 1,000q Disjoint Tensor Factorization', async () => {
+  const { verifyParametricRatchetPlantedDefects } = await import('./ratchet');
+  const {
+    buildSoftwareQuantumSceneTriangles,
+    rasterizeQuantumSceneTiles,
+    verifyCsrTilePrefixMonotonic,
+  } = await import('./tileRasterizer');
+  const { getHoistedCodebookProductLut } = await import('./codedMatmul');
+  const {
+    ContainerGrantMatrix,
+    proveHostRooflineSaturation,
+    planHostLaneSaturation,
+    verifyHostLaneSaturationOptimal,
+    partitionDisjointCircuitWires,
+  } = await import('./hostSaturation');
+  const {
+    QuantumCircuitBuilder,
+    VerdantAqmBackend,
+    VerdantAqmEstimatorV2,
+  } = await import('./qiskitBackend');
+
+  // 1. Enhanced Parametric & Performance Saturation Ratchet (3 Rust sources, 8/8 tiers, 8/8 planted self-checks)
+  const ratchetReport = auditParametricRatchetOnDisk();
+  assert.equal(ratchetReport.ok, true, JSON.stringify(ratchetReport.violations));
+  assert.equal(ratchetReport.auditedRustFileCount, 3);
+  assert.equal(ratchetReport.performanceSaturation.ok, true);
+  assert.equal(ratchetReport.performanceSaturation.optimizationTiersVerified, 8);
+  assert.equal(ratchetReport.performanceSaturation.optimizationTiersTotal, 8);
+  assert.equal(ratchetReport.performanceSaturation.arbitraryConcurrencyCapCount, 0);
+
+  const plantedChecks = verifyParametricRatchetPlantedDefects(loadDiskRatchetWorkspace());
+  assert.equal(plantedChecks.allCaughtAndRestored, true);
+  assert.equal(plantedChecks.casesVerified, 8);
+
+  // 2. Host lane saturation optimality & DenialWins container grant matrix
+  const grantMatrix = new ContainerGrantMatrix({
+    'wasm-core': true,
+    'offscreen-canvas': true,
+    'service-worker': true,
+    'audio-worklet': true,
+    'opfs-storage': true,
+    'webcrypto-prism-id': true,
+    'broadcast-channel': true,
+    'worker-pool': true,
+  });
+  grantMatrix.deny('worker-pool');
+  assert.equal(grantMatrix.isGranted('worker-pool'), false);
+  assert.equal(grantMatrix.isGranted('wasm-core'), true);
+
+  const satPlan64 = planHostLaneSaturation(64, 200);
+  assert.equal(satPlan64.activeLanes, 64);
+  assert.equal(satPlan64.optimalVerified, true);
+  assert.equal(verifyHostLaneSaturationOptimal(64, 200, satPlan64.activeLanes), true);
+
+  // 3. Hoisted 256-entry Grid<16> x Grid<16> codebook product LUT caching & exact values
+  const codebook16: readonly bigint[] = [
+    -8n, -6n, -5n, -4n, -3n, -2n, -1n, 0n,
+    1n, 2n, 3n, 4n, 5n, 6n, 8n, 12n,
+  ];
+  const lutA = getHoistedCodebookProductLut(codebook16);
+  const lutB = getHoistedCodebookProductLut(codebook16);
+  assert.equal(lutA.length, 256);
+  assert.equal(lutA, lutB, 'Expected identical cached LUT reference');
+  for (let i = 0; i < 16; i += 1) {
+    for (let j = 0; j < 16; j += 1) {
+      assert.equal(lutA[(i << 4) | j], codebook16[i] * codebook16[j]);
+    }
+  }
+
+  // 4. Flat CSR prefix-sum 16x16 tile rasterizer with zero per-frame framebuffer allocation
+  const csrCounts = new Int32Array([3, 0, 6, 5]);
+  assert.equal(verifyCsrTilePrefixMonotonic(csrCounts, new Int32Array([0, 3, 3, 9, 14]), 4, 14), true);
+  assert.equal(verifyCsrTilePrefixMonotonic(csrCounts, new Int32Array([0, 5, 3, 9, 14]), 4, 14), false);
+
+  const tris = buildSoftwareQuantumSceneTriangles({
+    sceneMode: 'bloch',
+    blochVectors: [
+      { qubit: 0, rx: 0, ry: 0, rz: 1, purity: 1, entropyBits: 0, p1: 0, collapsedTo: null },
+      { qubit: 1, rx: 1, ry: 0, rz: 0, purity: 1, entropyBits: 0, p1: 0.5, collapsedTo: null },
+    ],
+    entanglementEdges: [{ qubitA: 0, qubitB: 1, correlationStrength: 0.8 }],
+    surfaceFaults: [],
+    lod: 2,
+  });
+  const reusableFb = new Uint8ClampedArray(64 * 64 * 4);
+  const tileFrame = rasterizeQuantumSceneTiles({
+    width: 64,
+    height: 64,
+    yawRad: 0.45,
+    pitchRad: 0.3,
+    distance: 7.4,
+    triangles: tris,
+    outPixels: reusableFb,
+  });
+  assert.equal(tileFrame.pixels, reusableFb, 'Expected zero-alloc reuse of caller Uint8ClampedArray');
+  assert.equal(tileFrame.telemetry.csrVerified, true);
+  assert.equal(tileFrame.telemetry.zeroPerFrameHeapAllocs, true);
+  assert.ok(tileFrame.telemetry.totalTileRefs > 0);
+
+  // 5. 1,000-qubit non-Clifford circuit with 500 disjoint 2-qubit subsystems (H + T + CX + RY(0.37))
+  const qcRef2 = new QuantumCircuitBuilder(2, 2, 'ref_2q')
+    .h(0)
+    .t(0)
+    .cx(0, 1)
+    .ry(0.37, 1)
+    .build();
+  const est = new VerdantAqmEstimatorV2({ defaultPrecision: 0 });
+  const refEvZZ = est.run([[qcRef2, 'ZZ']]).result()[0].data.evs as number;
+  const refEvZI = est.run([[qcRef2, 'ZI']]).result()[0].data.evs as number;
+
+  const t1000Start = performance.now();
+  const qc1000Builder = new QuantumCircuitBuilder(1000, 4, 'disjoint_1000q_nonclifford');
+  const pairGates: Array<readonly [number, number]> = [];
+  for (let c = 0; c < 500; c += 1) {
+    const q0 = 2 * c;
+    const q1 = q0 + 1;
+    qc1000Builder.h(q0).t(q0).cx(q0, q1).ry(0.37, q1);
+    pairGates.push([q0, q1] as const);
+  }
+  const part1000 = partitionDisjointCircuitWires(1000, pairGates);
+  assert.equal(part1000.components.length, 500);
+  assert.equal(part1000.maxComponentQubits, 2);
+
+  const qc1000Unmeas = qc1000Builder.build();
+  const obsBlock0 = `${'I'.repeat(998)}ZZ`;
+  const obsTwoBlocks = `ZZ${'I'.repeat(996)}ZZ`;
+  const obsBlockLastZI = `ZI${'I'.repeat(998)}`;
+  const pub1000 = est.run([[qc1000Unmeas, [obsBlock0, obsTwoBlocks, obsBlockLastZI]]]).result()[0];
+  const evs1000 = pub1000.data.evs as number[];
+  assert.equal(pub1000.metadata.disjoint_tensor_factorized, true);
+  assert.equal(pub1000.metadata.subsystem_components, 500);
+  assert.ok(Math.abs(evs1000[0] - refEvZZ) < 1e-12);
+  assert.ok(Math.abs(evs1000[1] - refEvZZ * refEvZZ) < 1e-12);
+  assert.ok(Math.abs(evs1000[2] - refEvZI) < 1e-12);
+
+  const qc1000Meas = qc1000Builder.measure([0, 1, 998, 999], [0, 1, 2, 3]).build();
+  const backend = new VerdantAqmBackend({ shots: 512, seed_simulator: 2026 });
+  const res1000 = backend.run(qc1000Meas).result();
+  const dt1000 = performance.now() - t1000Start;
+  assert.equal(res1000.results[0].metadata.disjoint_tensor_factorized, true);
+  assert.equal(res1000.results[0].metadata.subsystem_components, 500);
+  assert.equal(res1000.results[0].metadata.active_kets, 2000);
+  assert.ok(dt1000 < 250, `Expected 1,000q non-Clifford disjoint Estimator+Backend < 250ms, got ${dt1000.toFixed(1)}ms`);
+
+  // 6. Multi-lane runHostSaturatedBatchAsync bit-exact parity & proveHostRooflineSaturation()
+  const batchCircs = Array.from({ length: 16 }, (_, idx) =>
+    new QuantumCircuitBuilder(3, 3, `sat_${idx}`)
+      .h(0)
+      .t(0)
+      .cx(0, 1)
+      .ry(0.21 * (idx + 1), 2)
+      .measure([0, 1, 2], [0, 1, 2])
+      .build(),
+  );
+  const syncRes = backend.run(batchCircs, { shots: 128, seed_simulator: 777 }).result();
+  const satBatch = await backend.runHostSaturatedBatchAsync(batchCircs, {
+    shots: 128,
+    seed_simulator: 777,
+    detected_cores_override: 8,
+  });
+  assert.equal(satBatch.saturationPlan.activeLanes, 8);
+  assert.equal(satBatch.saturationPlan.optimalVerified, true);
+  assert.equal(satBatch.job.job_id(), syncRes.job_id);
+  for (let i = 0; i < batchCircs.length; i += 1) {
+    assert.deepEqual(satBatch.job.result().get_counts(i), syncRes.get_counts(i));
+  }
+
+  const rooflineProof = proveHostRooflineSaturation();
+  assert.equal(rooflineProof.saturationPlan.optimalVerified, true);
+  assert.equal(rooflineProof.csrTilePrefixVerified, true);
+  assert.equal(rooflineProof.csrZeroPerFrameAllocs, true);
+  assert.equal(rooflineProof.disjoint1000qComponents, 500);
+  assert.ok(rooflineProof.proofKappa.startsWith('blake3:'));
+});
+
+

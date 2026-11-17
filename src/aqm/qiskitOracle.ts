@@ -8,6 +8,7 @@
  * pinned by SHA-256 in `/upstream.toml` and `/vendor/qiskit-oracle/oracle-lock.json`.
  */
 
+import { proveHostRooflineSaturation } from './hostSaturation';
 import {
   QISKIT_TARGET_ISA,
   QuantumCircuitBuilder,
@@ -78,7 +79,7 @@ export const LOCKED_UPSTREAM_ORACLE_FILES: readonly LockedUpstreamFileEntry[] = 
     commit: PRISM_DEVREL_UPSTREAM_COMMIT,
     upstreamPath: 'scripts/content/standard.json',
     bytes: 9806,
-    sha256: '6a429d5dead25578613ba2797adaa580e39fdc6067920b8e017f49c547f49008'.replace('49008', '48008'),
+    sha256: '6a429d5dead25578613ba2797adaa580e39fdc6067920b8e017f49c547f48008',
   },
   {
     fileName: 'content.json',
@@ -167,8 +168,8 @@ export function verifyVendoredOracleProvenance(
 }
 
 /**
- * Executes all 16 authoritative Qiskit `BackendV2`, `BasicSimulator`, `SamplerV2`, and `EstimatorV2`
- * validation oracle cases against `VerdantAqmBackend`.
+ * Executes all 17 authoritative Qiskit `BackendV2`, `BasicSimulator`, `SamplerV2`, `EstimatorV2`,
+ * and `inv017` disjoint non-Clifford scaling oracle cases against `VerdantAqmBackend`.
  */
 export function runAuthoritativeQiskitOracleSuite(
   rawPayloads?: Readonly<Record<string, string | Uint8Array>>,
@@ -743,6 +744,52 @@ export function runAuthoritativeQiskitOracleSuite(
         substrateUsed: 'PrismGuard',
         maxResidual: 0,
         detail: 'Refused cx(0, 0) DuplicateWireReference (AQ-02) and 3-qubit Pauli on 2-qubit circuit (AQ-20).',
+      };
+    },
+  );
+
+  // 17. `inv017` 1,000-Qubit Non-Clifford Disjoint Tensor-Product Factorization & Host Saturation Proof
+  recordCase(
+    'QO-17',
+    'app/src/Quantum.lex.tex',
+    'test_disjoint_1000q_non_clifford_and_host_saturation',
+    'AQ-19',
+    () => {
+      const nQubits = 1000;
+      const theta = 0.618;
+      const phi = -0.412;
+      const qc = new QuantumCircuitBuilder(nQubits, 4, 'disjoint_1000q_vqe');
+      for (let pair = 0; pair < nQubits; pair += 2) {
+        qc.ry(theta, pair).cx(pair, pair + 1).rz(phi, pair + 1).t(pair);
+      }
+
+      const estimator = new VerdantAqmEstimatorV2({ defaultPrecision: 0.0 });
+      const zFirst = `${'I'.repeat(nQubits - 1)}Z`;
+      const zzLast = `ZZ${'I'.repeat(nQubits - 2)}`;
+      const pubRes = estimator.run([[qc, [zFirst, zzLast]]]).result()[0];
+      const evs = pubRes.data.evs as readonly number[];
+      const exactFirst = Math.cos(theta);
+      const exactLast = 1.0;
+      const maxRes = Math.max(Math.abs(evs[0] - exactFirst), Math.abs(evs[1] - exactLast));
+
+      qc.measure(0, 0).measure(1, 1).measure(998, 2).measure(999, 3);
+      const runRes = new VerdantAqmBackend({ shots: 128, seed_simulator: 42 }).run(qc).result();
+      const exp = runRes.results[0];
+      const roof = proveHostRooflineSaturation();
+
+      const ok =
+        maxRes < 1e-13 &&
+        pubRes.metadata.disjoint_tensor_factorized === true &&
+        exp.metadata.disjoint_tensor_factorized === true &&
+        exp.metadata.subsystem_components === 500 &&
+        exp.metadata.active_kets === 1000 &&
+        roof.saturationPlan.optimalVerified;
+
+      return {
+        passed: ok,
+        substrateUsed: `${exp.metadata.substrate} (Disjoint ×500)`,
+        maxResidual: maxRes,
+        detail: `1,000q non-Clifford circuit factored into ${exp.metadata.subsystem_components} subsystems (${exp.metadata.active_kets} kets, residual ${maxRes.toExponential(2)}, ${roof.saturationPlan.activeLanes}/${roof.host.logicalCores} lanes).`,
       };
     },
   );

@@ -400,10 +400,8 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
                   <td className="py-2.5 px-3 font-semibold">{row.elapsedMs.toFixed(2)} ms</td>
                   <td className="py-2.5 px-3">{row.activeStateFootprint}</td>
                   <td className="py-2.5 px-3 text-slate-500">{row.denseClassicalEquivalent}</td>
-                  <td className="py-2.5 pl-3">
-                    <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-amber-700 dark:text-amber-300">
-                      {row.ledgerTier}
-                    </span>
+                  <td className="py-2.5 pl-3 font-semibold text-amber-700 dark:text-amber-400">
+                    {row.ledgerTier}
                   </td>
                 </tr>
               ))}
@@ -492,7 +490,7 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 text-xs font-mono tabular-nums">
                 <div>
                   <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                    ● Compiled {skWeaverResult.segments.length} Braid Segments
+                    Compiled {skWeaverResult.segments.length} Braid Segments
                   </span>
                   <span className="mx-2 text-slate-500">·</span>
                   <span>Word Len {skWeaverResult.totalWordLength}</span>
@@ -585,7 +583,7 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2 text-xs font-mono tabular-nums">
+            <div className="grid grid-cols-2 gap-3 pt-2.5 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
               {[
                 ['S Unitarity ||SS†−I||', mtcAxioms.sUnitaryResidual],
                 ['(ST)³ = p⁺S² Anomaly', mtcAxioms.modularStCubedResidual],
@@ -594,10 +592,7 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
                 ['Ribbon Balancing', mtcAxioms.balancingResidual],
                 ['Verlinde Integrality', mtcAxioms.verlindeIntegralResidual],
               ].map(([label, val]) => (
-                <div
-                  key={String(label)}
-                  className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
-                >
+                <div key={String(label)}>
                   <div className="text-[11px] text-slate-500">{label}</div>
                   <div className="mt-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
                     {Number(val).toExponential(2)}
@@ -612,31 +607,31 @@ export const AtlasMegascalePanel: React.FC<AtlasMegascalePanelProps> = ({
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 uor-matmul Zero-Decode Contraction Tiers (AQ-11)
               </h2>
-              <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
-                ● {codedKernelDemo.admission.status}
+              <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                {codedKernelDemo.admission.status}
               </span>
             </div>
 
-            <div className="space-y-2 text-xs font-mono tabular-nums">
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-between">
+            <div className="divide-y divide-slate-200 dark:divide-slate-800/80 pt-1 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+              <div className="py-2 flex justify-between gap-2">
                 <span>Grid&lt;16&gt; Codebook (4×16×4)</span>
                 <span className="text-emerald-600 dark:text-emerald-400">
                   {codedKernelDemo.grid.codebookLookups} lookups · 0 float allocs
                 </span>
               </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-between">
+              <div className="py-2 flex justify-between gap-2">
                 <span>Packed&lt;Grid&lt;16&gt;, 2&gt; Nibbles</span>
                 <span className="text-emerald-600 dark:text-emerald-400">
                   {codedKernelDemo.packed.packedBytesRead} packed B · out[0]={String(codedKernelDemo.packed.out[0])}
                 </span>
               </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-between">
+              <div className="py-2 flex justify-between gap-2">
                 <span>Runs&lt;Grid&lt;16&gt;, 16&gt; Sparse (64×64)</span>
                 <span className="text-emerald-600 dark:text-emerald-400">
                   {codedKernelDemo.runs.skippedZeroEntries}/4096 zeros skipped
                 </span>
               </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex justify-between">
+              <div className="py-2 flex justify-between gap-2">
                 <span>wasm32 Packed4 i64 GEMV (AQ-18)</span>
                 <span className="text-emerald-600 dark:text-emerald-400">
                   out[0]={String(codedKernelDemo.wasmGemv.out[0])} · {codedKernelDemo.wasmGemv.codedOps} ops

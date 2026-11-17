@@ -335,8 +335,8 @@ export const SurfaceCodePanel: React.FC<SurfaceCodePanelProps> = ({
                   Raw Logical Parity
                 </div>
                 <div className="mt-1 text-sm font-mono font-semibold text-slate-900 dark:text-slate-100">
-                  X̄: {syn.logicalXFlipped ? '▲ Flipped' : '● Intact'} · Z̄:{' '}
-                  {syn.logicalZFlipped ? '▲ Flipped' : '● Intact'}
+                  X̄: {syn.logicalXFlipped ? 'Flipped' : 'Intact'} · Z̄:{' '}
+                  {syn.logicalZFlipped ? 'Flipped' : 'Intact'}
                 </div>
               </div>
             </div>
@@ -360,8 +360,8 @@ export const SurfaceCodePanel: React.FC<SurfaceCodePanelProps> = ({
                   }`}
                 >
                   {lastDecode.logicalPreserved
-                    ? '● Logical Qubit Protected'
-                    : '✖ Distance Exceeded (Logical Error)'}
+                    ? 'Logical Qubit Protected'
+                    : 'Distance Exceeded (Logical Error)'}
                 </span>
               )}
             </div>
@@ -391,7 +391,7 @@ export const SurfaceCodePanel: React.FC<SurfaceCodePanelProps> = ({
                     <div className="text-slate-500">Wasm k7 Closure</div>
                     <div className="mt-0.5 text-base font-semibold text-emerald-600 dark:text-emerald-400">
                       {lastDecode.wasmAccelerated
-                        ? `● ${lastDecode.wasmRelaxations} relax`
+                        ? `${lastDecode.wasmRelaxations} relax`
                         : 'JS fallback'}
                     </div>
                   </div>

@@ -25,6 +25,12 @@ import {
   runWasmSymplecticCommute,
   runWasmTropicalClosure,
 } from '../aqm/holoGuest';
+import {
+  proveHostRooflineSaturation,
+  RooflineSaturationProof,
+  WORKER_RPC_WATCHDOG_MILLIS,
+  workerInFlightAdmissible,
+} from '../aqm/hostSaturation';
 import { AqmFrameSnapshot } from '../aqm/journal';
 import {
   CORE_WASM_ACCEPTANCE_VECTORS,
@@ -41,6 +47,7 @@ import {
   foundationBytesLexRaw,
   ontologyRootLexRaw,
   ratchetTomlRaw,
+  rustSaturationRaw,
   rustUorcRaw,
 } from '../aqm/ratchetBundle';
 import { AQM_STRATA_CERTIFICATES, CORE_WASM_REQUEST_MAX_BYTES } from '../aqm/stratum0';
@@ -81,6 +88,7 @@ const ARTIFACT_FILES: ReadonlyArray<{
   { key: 'advantage', label: 'advantage.feature', content: advantageFeatureSource },
   { key: 'rust', label: 'verdant-aqm/lib.rs', content: rustLibSource },
   { key: 'rust-uorc', label: 'verdant-aqm/uorc.rs', content: rustUorcRaw },
+  { key: 'rust-saturation', label: 'verdant-aqm/saturation.rs', content: rustSaturationRaw },
 ];
 
 export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
@@ -112,10 +120,13 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
   const [pagesDocKey, setPagesDocKey] = useState<'workflow' | 'appjson' | 'kappa' | 'sw' | 'precache'>('workflow');
   const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
 
-  useEffect(() => {
-    let worker: Worker | null = null;
+  const [rooflineProof, setRooflineProof] = useState<RooflineSaturationProof>(() =>
+    proveHostRooflineSaturation(),
+  );
+
+  const spawnVerifierWorker = () => {
     try {
-      worker = new Worker(new URL('../aqm/verifierWorker.ts', import.meta.url), {
+      const worker = new Worker(new URL('../aqm/verifierWorker.ts', import.meta.url), {
         type: 'module',
       });
       workerRef.current = worker;
@@ -126,6 +137,12 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
         if (cb) {
           pendingRef.current.delete(ev.data.id);
           cb(ev.data);
+        }
+      };
+      worker.onerror = () => {
+        if (workerRef.current === worker) {
+          worker.terminate();
+          workerRef.current = null;
         }
       };
 
@@ -146,11 +163,17 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
         }
       });
       worker.postMessage({ id: accId, kind: 'acceptance' });
+      return worker;
     } catch {
       workerRef.current = null;
+      return null;
     }
+  };
 
+  useEffect(() => {
+    const worker = spawnVerifierWorker();
     return () => {
+      pendingRef.current.clear();
       worker?.terminate();
       workerRef.current = null;
     };
@@ -161,13 +184,30 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
     fallback: () => T,
     onDone: (val: T) => void,
   ) => {
-    const w = workerRef.current;
-    if (!w) {
+    const w = workerRef.current ?? spawnVerifierWorker();
+    // Enforce <= 2 in-flight RPC frames (`workerInFlightAdmissible`) & 15,000 ms watchdog (`WORKER_RPC_WATCHDOG_MILLIS`)
+    if (!w || !workerInFlightAdmissible(pendingRef.current.size + 1)) {
       onDone(fallback());
       return;
     }
     const id = reqIdRef.current++;
+    let settled = false;
+    const watchdogTimer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      pendingRef.current.delete(id);
+      if (workerRef.current === w) {
+        w.terminate();
+        workerRef.current = null;
+        spawnVerifierWorker();
+      }
+      onDone(fallback());
+    }, WORKER_RPC_WATCHDOG_MILLIS);
+
     pendingRef.current.set(id, (resp) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(watchdogTimer);
       if (resp.ok && resp.value !== undefined) {
         onDone(resp.value as T);
       } else {
@@ -369,26 +409,26 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+                  <div>
                     <div className="text-slate-500">Target Pages URL</div>
                     <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400 truncate">
                       {parsedApp.live}
                     </div>
                   </div>
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <div>
                     <div className="text-slate-500">Input-Addressed Cache</div>
                     <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
                       ghcr.io/*/prism-holo (BLAKE3 κ)
                     </div>
                   </div>
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <div>
                     <div className="text-slate-500">Provenance Attestation</div>
                     <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
                       attest-build-provenance@v4.2.2
                     </div>
                   </div>
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                  <div>
                     <div className="text-slate-500">Offline SW Cache</div>
                     <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
                       prism-&lt;sha256&gt; + precache.json
@@ -396,7 +436,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800/80 space-y-1.5 text-xs">
                   <div className="font-semibold text-slate-900 dark:text-slate-100">
                     Published Claim ({parsedApp.theorems.length} Pinned Theorems in site/app.json)
                   </div>
@@ -522,26 +562,26 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
             </div>
 
             {workerIdentity && (
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1 text-xs font-mono tabular-nums">
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+                <div>
                   <div className="text-slate-500">Archive Format</div>
                   <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
                     HOLO v{workerIdentity.holoVersion} · {workerIdentity.archiveBytesLength} B
                   </div>
                 </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div>
                   <div className="text-slate-500">Compiled wasm32 Guest</div>
                   <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
                     {workerIdentity.wasmBytesLength} B · {workerIdentity.exportedSymbols.length} exports
                   </div>
                 </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div>
                   <div className="text-slate-500">wasm_kappa (BLAKE3)</div>
                   <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400 truncate">
                     {workerIdentity.wasmKappa}
                   </div>
                 </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div>
                   <div className="text-slate-500">32B Footer Fingerprint</div>
                   <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100 truncate">
                     {workerIdentity.attestation}
@@ -550,7 +590,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               </div>
             )}
 
-            <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 border-t border-slate-200 dark:border-slate-800/80">
+            <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 border-t border-slate-200 dark:border-slate-800/80">
               <span>
                 Zero-Import Exports (AQ-18): memory · holo_alloc · holo_run · wasm_symplectic_commute · wasm_coded_packed4_gemv · wasm_tropical_minplus_closure
               </span>
@@ -575,6 +615,11 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                   <span>{ratchetAudit.report.auditedRustFileCount} Rust Engine Sources</span>
                   <span className="mx-2" aria-hidden="true">·</span>
                   <span>
+                    Workload Tiers: {ratchetAudit.report.performanceSaturation.optimizationTiersVerified}/
+                    {ratchetAudit.report.performanceSaturation.optimizationTiersTotal}
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>
                     Planted Self-Checks: {ratchetAudit.planted.casesVerified}/{ratchetAudit.planted.casesVerified}{' '}
                     {ratchetAudit.planted.allCaughtAndRestored ? 'Caught & Restored' : 'Failed'}
                   </span>
@@ -593,7 +638,7 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs font-mono tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
               {[
                 [
                   'Ontology > 1',
@@ -626,16 +671,79 @@ export const PrismVerifierPanel: React.FC<PrismVerifierPanelProps> = ({
                   ratchetAudit.report.ceilings.max_engine_rust_magic_literal_count,
                 ],
               ].map(([label, actual, ceiling]) => (
-                <div
-                  key={String(label)}
-                  className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
-                >
+                <div key={String(label)}>
                   <div className="text-slate-500 truncate">{label}</div>
                   <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400">
                     {actual} / {ceiling}
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Host Environment Saturation & Roofline Proof (inv017 · VE-33..VE-36) */}
+          <div className="p-5 rounded-xl bg-white dark:bg-[#0F1622] border border-slate-200 dark:border-slate-800 space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Host Resource Saturation &amp; Roofline Performance Proof (inv017 · VE-33..VE-36)
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                  <span>
+                    Host Cores: {rooflineProof.host.logicalCores} ({rooflineProof.saturationPlan.activeLanes}/{rooflineProof.host.logicalCores} Lanes Saturated)
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>
+                    Workload Tiers: {rooflineProof.optimizationTiersVerified}/8 Zero-Alloc Verified
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>
+                    Container Grants: {rooflineProof.host.grantedOrganCount}/{rooflineProof.host.containerGrants.length} (DenialWins)
+                  </span>
+                  <span className="mx-2" aria-hidden="true">·</span>
+                  <span>Governor: {rooflineProof.governorScalePermille}‰</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRooflineProof(proveHostRooflineSaturation())}
+                className="h-9 px-3.5 rounded-lg text-xs font-semibold border border-emerald-600 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white transition-colors whitespace-nowrap shrink-0"
+              >
+                Prove Host Saturation
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-2 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+              <div>
+                <div className="text-slate-500">512q Symplectic Tableau</div>
+                <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+                  {rooflineProof.symplectic512qGatesPerSec.toLocaleString()} gates/s
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Hoisted-256 Packed GEMV</div>
+                <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+                  {rooflineProof.codedGemvMacsPerSec.toLocaleString()} MAC/s
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">16x16 CSR Software Tile</div>
+                <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+                  {rooflineProof.csrTileMegapixelsPerSec} MP/s · {rooflineProof.csrZeroPerFrameAllocs ? '0 alloc' : 'alloc'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">1,000q Disjoint Factorizer</div>
+                <div className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+                  {rooflineProof.disjoint1000qComponents} subsystems ({rooflineProof.disjoint1000qMaxSubsystemQubits}q max)
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Roofline Proof κ</div>
+                <div className="mt-0.5 font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                  {rooflineProof.proofKappa}
+                </div>
+              </div>
             </div>
           </div>
 

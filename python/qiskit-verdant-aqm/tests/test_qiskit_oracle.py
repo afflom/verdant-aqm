@@ -687,6 +687,109 @@ class TestAuthoritativeQiskitOracle(unittest.TestCase):
                     else:
                         sys.modules.pop(mname, None)
 
+    def test_24_arbitrary_disjoint_tensor_factorization_and_host_saturation(self) -> None:
+        import time
+        from qiskit_verdant_aqm import (
+            detect_host_parallel_lanes,
+            partition_disjoint_circuit_wires,
+            prove_host_saturation,
+        )
+        from qiskit_verdant_aqm.backend import normalize_circuit
+
+        # 1. Exact 1,000-qubit non-Clifford circuit (500 disjoint 2-qubit H + T + CX + RY(0.37) blocks)
+        qc_ref2 = QuantumCircuit(2, 2, name="ref_2q")
+        qc_ref2.h(0).t(0).cx(0, 1).ry(0.37, 1)
+        est = VerdantAqmEstimatorV2(default_precision=0.0)
+        ref_zz = float(est.run([(qc_ref2, "ZZ")]).result()[0].data.evs)
+        ref_zi = float(est.run([(qc_ref2, "ZI")]).result()[0].data.evs)
+
+        t0 = time.perf_counter()
+        qc_1000 = QuantumCircuit(1000, 4, name="disjoint_1000q_nonclifford")
+        for c in range(500):
+            q0 = 2 * c
+            q1 = q0 + 1
+            qc_1000.h(q0).t(q0).cx(q0, q1).ry(0.37, q1)
+
+        norm_1000 = normalize_circuit(qc_1000)
+        comps, _, active_wires, max_comp = partition_disjoint_circuit_wires(1000, norm_1000.instructions)
+        self.assertEqual(len(comps), 500)
+        self.assertEqual(active_wires, 1000)
+        self.assertEqual(max_comp, 2)
+
+        obs_block0 = ("I" * 998) + "ZZ"
+        obs_two_blocks = "ZZ" + ("I" * 996) + "ZZ"
+        obs_last_zi = "ZI" + ("I" * 998)
+        pub_1000 = est.run([(qc_1000, [obs_block0, obs_two_blocks, obs_last_zi])]).result()[0]
+        self.assertTrue(pub_1000.metadata.get("disjoint_tensor_factorized"))
+        self.assertEqual(pub_1000.metadata.get("subsystem_components"), 500)
+        self.assertAlmostEqual(pub_1000.data.evs[0], ref_zz, places=12)
+        self.assertAlmostEqual(pub_1000.data.evs[1], ref_zz * ref_zz, places=12)
+        self.assertAlmostEqual(pub_1000.data.evs[2], ref_zi, places=12)
+
+        qc_1000.measure([0, 1, 998, 999], [0, 1, 2, 3])
+        res_1000 = VerdantAqmBackend(shots=512, seed_simulator=2026).run(qc_1000).result()
+        dt_1000 = time.perf_counter() - t0
+        meta_1000 = res_1000.results[0].metadata
+        self.assertTrue(meta_1000.get("disjoint_tensor_factorized"))
+        self.assertEqual(meta_1000.get("subsystem_components"), 500)
+        self.assertEqual(meta_1000["active_kets"], 2000)
+        self.assertLess(dt_1000, 0.5, f"Expected 1,000q non-Clifford disjoint run < 0.5s, took {dt_1000:.3f}s")
+
+        sampler_pub = VerdantAqmSamplerV2(default_shots=256, seed=2026).run([qc_1000]).result()[0]
+        self.assertTrue(sampler_pub.metadata.get("disjoint_tensor_factorized"))
+        self.assertEqual(sampler_pub.metadata.get("subsystem_components"), 500)
+        self.assertEqual(sum(sampler_pub.data.meas.get_counts().values()), 256)
+
+        # 2. Multi-lane host saturation & 100% bit-identical parity vs max_parallel_threads=1
+        host_lanes = detect_host_parallel_lanes()
+        self.assertGreaterEqual(host_lanes, 1)
+        batch_circs: list[QuantumCircuit] = []
+        for idx in range(16):
+            bqc = QuantumCircuit(4, 4, name=f"parallel_batch_{idx}")
+            bqc.h(0).t(0).cx(0, 1).ry(0.17 * (idx + 1), 2).cx(2, 3)
+            bqc.measure([0, 1, 2, 3], [0, 1, 2, 3])
+            batch_circs.append(bqc)
+
+        res_single = VerdantAqmBackend(shots=256, seed_simulator=9001).run(
+            batch_circs, memory=True, max_parallel_threads=1
+        ).result()
+        res_saturated = VerdantAqmBackend(shots=256, seed_simulator=9001).run(
+            batch_circs, memory=True
+        ).result()
+        self.assertEqual(res_single.job_id, res_saturated.job_id)
+        self.assertEqual(
+            res_saturated.results[0].metadata["parallel_lanes_saturated"],
+            min(host_lanes, 16),
+        )
+        for idx in range(16):
+            self.assertEqual(res_single.get_counts(idx), res_saturated.get_counts(idx))
+            self.assertEqual(res_single.get_memory(idx), res_saturated.get_memory(idx))
+
+        # Finite-precision EstimatorV2 multi-PUB + sweep bit-identical parity across thread counts
+        theta = Parameter("theta")
+        qc_sweep = QuantumCircuit(2, name="sweep_parity")
+        qc_sweep.ry(theta, 0).cx(0, 1)
+        sweeps = [[0.1], [0.5], [0.9], [1.3]]
+        est_1 = VerdantAqmEstimatorV2(
+            backend=VerdantAqmBackend(max_parallel_threads=1), default_precision=0.05, seed=1234
+        )
+        est_sat = VerdantAqmEstimatorV2(
+            backend=VerdantAqmBackend(), default_precision=0.05, seed=1234
+        )
+        r_est_1 = est_1.run([(qc_sweep, "ZZ", sweeps), (qc_sweep, "XX", sweeps)]).result()
+        r_est_sat = est_sat.run([(qc_sweep, "ZZ", sweeps), (qc_sweep, "XX", sweeps)]).result()
+        self.assertEqual(r_est_1[0].data.evs, r_est_sat[0].data.evs)
+        self.assertEqual(r_est_1[1].data.evs, r_est_sat[1].data.evs)
+
+        # 3. Empirical Python Qiskit Host Roofline Saturation Certificate
+        cert = prove_host_saturation()
+        self.assertTrue(cert["optimal_lane_saturation"])
+        self.assertTrue(cert["disjoint_tensor_factorized"])
+        self.assertEqual(cert["disjoint_1000q_components"], 500)
+        self.assertEqual(cert["disjoint_1000q_active_kets"], 2000)
+        self.assertTrue(str(cert["proof_kappa"]).startswith("blake3:"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

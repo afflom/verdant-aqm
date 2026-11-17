@@ -36,6 +36,7 @@ OpenQASM 2.0 / Studio  ──▶  & Interactive Browser Workbench (Studio 3D · 
 | **`CyclotomicExact`** (`AQ-03`, `AQ-17`) | $\mathbb{Z}[\zeta_8] / (\sqrt{2})^k$ sparse active-wire map | Clifford+$T$, `ccx` (Toffoli), `cswap` (Fredkin), sparse cat & oracle states | `10,000,000+` qubits ($\mathcal{O}(\|\text{active kets}\|)$, exact integer $\ell_2$ norm $= 1$) |
 | **`ExactMps`** (`AQ-14`) | $\mathbb{Q}(\zeta_8)$ Galois-companion RREF tensor train | Bounded-entanglement 1D non-Clifford chains with $2^n$ dense support | `64–256+` qubits ($\mathcal{O}(n \cdot \chi^3)$ exact rank compression, zero SVD drift) |
 | **`ExactSparseContinuum`** (`AQ-19`, `AQ-20`) | Sparse active-ket $\mathbb{C}$ map | Parametric `rx, ry, rz, p, u, cp, rxx, rzz` & variational `EstimatorV2` sweeps | `< 1e-12` analytical parity against upstream `Qiskit/qiskit` reference suites |
+| **`DisjointProductState`** (`inv017`) | Connected-component tensor product $\bigotimes_c \lvert\psi_c\rangle$ | Arbitrary non-Clifford circuits with $\ge 2$ unentangled subsystems (`max_c <= 16`) | `1,000+` non-Clifford qubits in $\mathcal{O}(C \cdot 2^{\max_c})$ exact local kets |
 | **`AtlasHolospace`** (`AQ-16`) | 96-vertex UOR Atlas $D_4$ MTC ($\mathcal{FP}\dim^2 = 36$) & $PU(22)$ | Topological Fibonacci/Ising-class anyon braids & `SkWeaver` synthesis | `16,384+` braid wires via BLAKE3 $\kappa$ prefix memoization (`768 B` carrier) |
 
 ## Quickstart by reader persona
@@ -106,13 +107,13 @@ print("Exact Bell <0.5 ZZ + 0.5 XX>:", ev)
 ### 3. Run the verification, ratchet, oracle, and GitHub Pages gates
 
 ```bash
-# 1. Enforce permanent zero-constants parametric ratchet (FI-08: 6/6 ceilings = 0)
+# 1. Enforce permanent zero-constants & host-saturation ratchet (FI-08 / inv017: 6/6 ceilings = 0, 8/8 perf tiers)
 npm run ratchet
 
-# 2. Run TypeScript typecheck, 36 Wasm guest vectors, 13 R5 defect gates & 16 TS oracle cases
+# 2. Run TypeScript typecheck, 36 Wasm guest vectors, 13 R5 defect gates & 15 TS test suites
 npm run lint && npm test
 
-# 3. Run the 20-test Python Qiskit BackendV2 / SamplerV2 / EstimatorV2 validation oracle
+# 3. Run the 25-test Python Qiskit BackendV2 / SamplerV2 / EstimatorV2 & host-saturation oracle
 npm run test:python
 
 # 4. Assemble and verify the GitHub Pages artifact bundle (app.holo, notebooks, docs, weight gate)
@@ -126,25 +127,26 @@ Verdant AQM grounds every runtime invariant in eight constructive `.lex.tex` spe
 | Facet | Specification Module | Grounded Invariants & Decisions |
 | :--- | :--- | :--- |
 | **Stratum 0 Ontology** | [`app/src/Foundation/Ontology/V1/Model.lex.tex`](./app/src/Foundation/Ontology/V1/Model.lex.tex), [`Bytes.lex.tex`](./app/src/Foundation/Bytes.lex.tex) | Constructive `OctantIndex`, `Byte`, `Word64`, and `BoundedBuffer` derived from `{0, 1}` with zero numeric literals $> 1$. |
-| **Quantum Law** | [`app/src/Quantum.lex.tex`](./app/src/Quantum.lex.tex) | Wire linearity (`inv001`), $\mathbb{Z}[\zeta_8]$ norm conservation (`inv004`), $\mathbb{Z}_8$ phase fusion (`inv011`), unbounded Qiskit `Target` (`inv012`), pure `UORC` wire (`inv013`), zero ratchet ceilings (`inv015`), and bit-sliced mod-4 $Z$-collapse (`inv016`). |
+| **Quantum Law** | [`app/src/Quantum.lex.tex`](./app/src/Quantum.lex.tex) | Wire linearity (`inv001`), $\mathbb{Z}[\zeta_8]$ norm conservation (`inv004`), $\mathbb{Z}_8$ phase fusion (`inv011`), unbounded Qiskit `Target` (`inv012`), pure `UORC` wire (`inv013`), zero ratchet ceilings (`inv015`), bit-sliced mod-4 $Z$-collapse (`inv016`), and host compute saturation & disjoint factorization (`inv017`). |
 | **Architecture** | [`app/src/Architecture.lex.tex`](./app/src/Architecture.lex.tex) | ISO/IEC/IEEE 42010 architecture views mapping 5 stakeholders, 7 concerns, and 12 system components (`architectureValid`). |
 | **Design** | [`app/src/Design.lex.tex`](./app/src/Design.lex.tex) | ISO 19450 Object-Process Methodology links and UML 2.5.1 six-state deterministic lifecycle machine (`designValid`). |
 | **Features** | [`app/src/Features.lex.tex`](./app/src/Features.lex.tex), [`model/ids.toml`](./model/ids.toml) | Complete capability registry `AQ-01` through `AQ-23` traced to Gherkin acceptance scenarios in [`features/suites/aqm.feature`](./features/suites/aqm.feature). |
-| **Security** | [`app/src/Security.lex.tex`](./app/src/Security.lex.tex) | STRIDE threat controls: zero-import `wasm32` sandbox, BLAKE3 `.holo` footer, 32-byte SHA-256 `UORC` seal, and SHA-256 oracle locks (`strideEnumerated`). |
-| **Quality** | [`app/src/Quality.lex.tex`](./app/src/Quality.lex.tex), [`model/measures.toml`](./model/measures.toml) | ISO/IEC 25010:2023 pinned thresholds `QM-01` through `QM-10` (`pinnedQualityThresholdsHold`). |
+| **Security** | [`app/src/Security.lex.tex`](./app/src/Security.lex.tex) | STRIDE threat controls: zero-import `wasm32` sandbox, BLAKE3 `.holo` footer, 32-byte SHA-256 `UORC` seal, `DenialWins` container grants, and SHA-256 oracle locks (`strideEnumerated`). |
+| **Quality** | [`app/src/Quality.lex.tex`](./app/src/Quality.lex.tex), [`model/measures.toml`](./model/measures.toml) | ISO/IEC 25010:2023 pinned thresholds `QM-01` through `QM-12` (`pinnedQualityThresholdsHold`). |
 | **Compliance & Honesty** | [`app/src/Compliance.lex.tex`](./app/src/Compliance.lex.tex), [`app/src/Honesty.lex.tex`](./app/src/Honesty.lex.tex) | Three-tier claim ledger (`some-true`, `build`, `open`) and `evaluateDevRelPublishGate` refusing unverified notebooks or filler prose. |
 
-## Pure `UORC` post-boot wire (`VE-36`) & parametric ratchet (`FI-08`)
+## Pure `UORC` post-boot wire (`VE-36`), host saturation (`VE-33..VE-35`) & parametric ratchet (`FI-08`)
 
 - **Pure `UORC` Wire (`AQ-22`):** Every post-boot state frame (`LOD0..LOD4`), `#uorc=` URL snapshot, OPFS `.uorc` cache entry, 2-of-3 `Stitch` custody shard, stride-8 rollback checkpoint, `CDMX` zero-decode `CodedMatrix` bundle, and serialized Qiskit `Result` (`to_uorc_bytes()` / `from_uorc_bytes()`) carries a byte-identical `b"UORC"` header, `O(N)` rolling hash-chain LZ77/RLE payload, and 32-byte FIPS 180-4 SHA-256 seal across Rust (`crates/verdant-aqm/src/uorc.rs`), TypeScript (`src/aqm/uorc.ts`), and Python (`qiskit_verdant_aqm/uorc_wire.py`). Only the three boundaries modeled in `Quantum::UorcExemption` (`cold-boot-http-holo`, `core-wasm-verifier-64b`, `host-standard-interop`) cross raw host bytes.
-- **Permanent Parametric Ratchet (`AQ-23`):** [`model/parametric-ratchet.toml`](./model/parametric-ratchet.toml) pins all six ceilings of `prism/parametric-ratchet/1` to `0` across all 10 `.lex.tex` modules and the Rust crate (`crates/verdant-aqm/`), verified continuously by `npm run ratchet` and six planted-violation mutation tests.
+- **Host Resource Saturation & Roofline Proofs (`inv017`):** Senses live host logical cores (`navigator.hardwareConcurrency` / `os.cpu_count()`), `WebAssembly` SIMD, WebGL2, and `DenialWins` `ContainerGrantMatrix` capabilities with zero artificial thread caps (`activeLanes == min(detectedCores, workUnits)`), saturates multi-circuit Qiskit batches and mid-circuit shot trajectories with 100% bit-identical seeded reproducibility, factors unentangled non-Clifford subsystems into $\mathcal{O}(C \cdot 2^{\max_c})$ kets, and emits BLAKE3 roofline certificates via `proveHostRooflineSaturation()` and `prove_host_saturation()`.
+- **Permanent Parametric & Performance Ratchet (`AQ-23`):** [`model/parametric-ratchet.toml`](./model/parametric-ratchet.toml) pins all six ceilings of `prism/parametric-ratchet/1` to `0` across all 10 `.lex.tex` modules and all three Rust engine modules (`crates/verdant-aqm/src/{lib,uorc,saturation}.rs`), audited alongside `8/8` zero-allocation `WorkloadOptimizationSpec` tiers and `8/8` planted-violation mutation tests via `npm run ratchet`.
 
 ## Repository layout
 
 ```
 verdant-aqm/
 ├── app/                          # 8 Prism .lex.tex facets + Stratum 0 ontology (lexlean.toml)
-├── crates/verdant-aqm/           # Zero-std Rust guest & pure UORC codec (lib.rs, uorc.rs)
+├── crates/verdant-aqm/           # Zero-std Rust guest, UORC codec & host saturation (lib.rs, uorc.rs, saturation.rs)
 ├── python/qiskit-verdant-aqm/    # PEP 621 Apache-2.0 Qiskit BackendV2 & Primitives V2 package
 │   ├── qiskit_verdant_aqm/       # VerdantAqmBackend, Target, Provider, SamplerV2, EstimatorV2
 │   └── tests/test_qiskit_oracle.py

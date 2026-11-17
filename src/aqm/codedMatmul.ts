@@ -8,16 +8,52 @@
  * never materializing dense floating-point matrices.
  */
 
-import { FOUR, ONE, SIXTEEN, TWO, ZERO } from './stratum0';
+import { FOUR, ONE, SIXTEEN, TWO, TWO_FIFTY_SIX, ZERO } from './stratum0';
 
 export const GRID16_LEVELS = SIXTEEN;
 export const PACKED_NIBBLE_LANES = TWO;
 export const RUN_MAX_SPAN = SIXTEEN;
+export const CODEBOOK_PRODUCT_LUT_SIZE = TWO_FIFTY_SIX;
+
+const hoistedLutByRef = new WeakMap<readonly bigint[], readonly bigint[]>();
+let lastSignatureKey = '';
+let lastSignatureLut: readonly bigint[] | null = null;
+
+/**
+ * Hoisted `2^8 = 256`-entry `Grid<16> x Grid<16>` exact ring product lookup table (`VE-35`).
+ * Eliminates repeated `256`-element LUT rebuilds and inner-loop `BigInt` multiplications.
+ */
+export function getHoistedCodebookProductLut(codebook: readonly bigint[]): readonly bigint[] {
+  if (codebook.length !== GRID16_LEVELS) {
+    throw new Error(`Grid<16> requires ${GRID16_LEVELS} codebook levels, got ${codebook.length}`);
+  }
+  const byRef = hoistedLutByRef.get(codebook);
+  if (byRef) return byRef;
+
+  const sig = codebook.join(',');
+  if (sig === lastSignatureKey && lastSignatureLut !== null) {
+    hoistedLutByRef.set(codebook, lastSignatureLut);
+    return lastSignatureLut;
+  }
+
+  const prodTable = new Array<bigint>(CODEBOOK_PRODUCT_LUT_SIZE);
+  for (let i = ZERO; i < GRID16_LEVELS; i += ONE) {
+    const rowOff = i << FOUR;
+    const ci = codebook[i];
+    for (let j = ZERO; j < GRID16_LEVELS; j += ONE) {
+      prodTable[rowOff | j] = ci * codebook[j];
+    }
+  }
+  hoistedLutByRef.set(codebook, prodTable);
+  lastSignatureKey = sig;
+  lastSignatureLut = prodTable;
+  return prodTable;
+}
 
 /**
  * Tier 1: `Grid<16>` Codebook Zero-Decode Contraction (`contractGridCodebook`).
  * Multiplies an `(m x k)` matrix of 4-bit codebook indices `[0..15]` against a `(k x n)`
- * matrix of 4-bit codebook indices using a 16-entry signed integer codebook `L[0..15]`,
+ * matrix of 4-bit codebook indices using a hoisted 256-entry signed integer product LUT,
  * accumulating exact integer dot products in `BigInt`.
  */
 export function contractGridCodebook(params: {
@@ -33,30 +69,21 @@ export function contractGridCodebook(params: {
   readonly denseFloatAllocs: 0;
 } {
   const { m, k, n, codebook, lhsIndices, rhsIndices } = params;
-  if (codebook.length !== GRID16_LEVELS) {
-    throw new Error(`Grid<16> requires ${GRID16_LEVELS} codebook levels, got ${codebook.length}`);
-  }
+  const prodTable = getHoistedCodebookProductLut(codebook);
   if (lhsIndices.length !== m * k || rhsIndices.length !== k * n) {
     throw new Error('Grid<16> index buffer shape mismatch');
-  }
-
-  // Precompute 16x16 exact ring product table in codebook space (256 entries)
-  const prodTable: bigint[] = new Array(GRID16_LEVELS * GRID16_LEVELS).fill(0n);
-  for (let i = ZERO; i < GRID16_LEVELS; i += ONE) {
-    for (let j = ZERO; j < GRID16_LEVELS; j += ONE) {
-      prodTable[i * GRID16_LEVELS + j] = codebook[i] * codebook[j];
-    }
   }
 
   const out: bigint[] = new Array(m * n).fill(0n);
   let lookups = ZERO;
   for (let row = ZERO; row < m; row += ONE) {
+    const rowBase = row * k;
     for (let col = ZERO; col < n; col += ONE) {
       let acc = 0n;
       for (let p = ZERO; p < k; p += ONE) {
-        const idxA = lhsIndices[row * k + p] & 0x0f;
+        const idxA = lhsIndices[rowBase + p] & 0x0f;
         const idxB = rhsIndices[p * n + col] & 0x0f;
-        acc += prodTable[idxA * GRID16_LEVELS + idxB];
+        acc += prodTable[(idxA << FOUR) | idxB];
         lookups += ONE;
       }
       out[row * n + col] = acc;
@@ -69,7 +96,8 @@ export function contractGridCodebook(params: {
 /**
  * Tier 2: `Packed<Grid<16>, 2>` Nibble-Packed Zero-Decode Contraction (`contractPackedNibbles`).
  * Each byte packs TWO 4-bit `Grid<16>` lanes (`low = byte & 0x0f`, `high = (byte >>> 4) & 0x0f`).
- * Contracts `(m x k)` against `(k x n)` directly from packed byte streams (`ceil(k / 2)` bytes/row).
+ * Contracts `(m x k)` against `(k x n)` directly from packed byte streams (`ceil(k / 2)` bytes/row)
+ * via the hoisted 256-entry product LUT with zero inner-loop `BigInt` multiplications.
  */
 export function packGrid16Nibbles(indices: readonly number[]): Uint8Array {
   const packedLen = Math.ceil(indices.length / PACKED_NIBBLE_LANES);
@@ -99,7 +127,10 @@ export function contractPackedNibbles(params: {
   readonly denseFloatAllocs: 0;
 } {
   const { m, k, n, codebook, lhsPackedRows, rhsPackedCols } = params;
+  const prodTable = getHoistedCodebookProductLut(codebook);
   const packedK = Math.ceil(k / PACKED_NIBBLE_LANES);
+  const fullPairs = k >>> ONE;
+  const hasOddTail = (k & ONE) === ONE;
   const out: bigint[] = new Array(m * n).fill(0n);
   let bytesRead = ZERO;
 
@@ -108,18 +139,19 @@ export function contractPackedNibbles(params: {
     for (let col = ZERO; col < n; col += ONE) {
       const colBuf = rhsPackedCols[col];
       let acc = 0n;
-      for (let b = ZERO; b < packedK; b += ONE) {
+      for (let b = ZERO; b < fullPairs; b += ONE) {
         const bA = rowBuf[b];
         const bB = colBuf[b];
         bytesRead += TWO;
-        const p0 = b * TWO;
-        if (p0 < k) {
-          acc += codebook[bA & 0x0f] * codebook[bB & 0x0f];
-        }
-        const p1 = p0 + ONE;
-        if (p1 < k) {
-          acc += codebook[(bA >>> FOUR) & 0x0f] * codebook[(bB >>> FOUR) & 0x0f];
-        }
+        acc +=
+          prodTable[((bA & 0x0f) << FOUR) | (bB & 0x0f)] +
+          prodTable[(bA & 0xf0) | ((bB >>> FOUR) & 0x0f)];
+      }
+      if (hasOddTail) {
+        const bA = rowBuf[packedK - ONE];
+        const bB = colBuf[packedK - ONE];
+        bytesRead += TWO;
+        acc += prodTable[((bA & 0x0f) << FOUR) | (bB & 0x0f)];
       }
       out[row * n + col] = acc;
     }
@@ -150,6 +182,7 @@ export function contractSparseRuns(params: {
   readonly logicalDimension: number;
 } {
   const { m, codebook, lhsRows, ketSupport } = params;
+  const prodTable = getHoistedCodebookProductLut(codebook);
   const outSupport = new Map<number, bigint>();
   let visited = ZERO;
 
@@ -159,7 +192,7 @@ export function contractSparseRuns(params: {
     for (const run of runs) {
       const rhsCode = ketSupport.get(run.col);
       if (rhsCode !== undefined) {
-        acc += codebook[run.codeIdx & 0x0f] * codebook[rhsCode & 0x0f];
+        acc += prodTable[((run.codeIdx & 0x0f) << FOUR) | (rhsCode & 0x0f)];
         visited += ONE;
       }
     }

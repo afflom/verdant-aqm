@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { epochElisionAdmissible, gpuContextHealthy } from '../aqm/hostSaturation';
 import {
   PauliFault,
   buildRotatedSurfaceCode,
@@ -48,17 +49,30 @@ interface QuantumViewport3DProps {
   onCycleDataQubitFault: (dataQubitIndex: number) => void;
 }
 
-const isSoftwareGl = (() => {
-  if (typeof document === 'undefined') return true;
-  const probeCanvas = document.createElement('canvas');
-  const gl = probeCanvas.getContext('webgl2');
-  if (!gl) return true;
-  const ext = gl.getExtension('WEBGL_debug_renderer_info');
-  const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-  const gpu = String(gl.getParameter(param) || '');
-  gl.getExtension('WEBGL_lose_context')?.loseContext();
-  return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-})();
+let cachedIsSoftwareGl: boolean | null = null;
+function detectIsSoftwareGl(): boolean {
+  if (cachedIsSoftwareGl !== null) return cachedIsSoftwareGl;
+  if (typeof document === 'undefined') {
+    cachedIsSoftwareGl = true;
+    return true;
+  }
+  try {
+    const probeCanvas = document.createElement('canvas');
+    const gl = probeCanvas.getContext('webgl2');
+    if (!gl) {
+      cachedIsSoftwareGl = true;
+      return true;
+    }
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+    const gpu = String(gl.getParameter(param) || '');
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    cachedIsSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+  } catch {
+    cachedIsSoftwareGl = true;
+  }
+  return cachedIsSoftwareGl;
+}
 
 function createBenchGridTexture(maxAnisotropy: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -142,8 +156,12 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
   const callbacksRef = useRef({ onSelectWire, onCycleDataQubitFault });
   callbacksRef.current = { onSelectWire, onCycleDataQubitFault };
 
+  const tileFbRef = useRef<Uint8ClampedArray | null>(null);
+  const sceneEpochRef = useRef(0);
+  const syncedWebglEpochRef = useRef(-1);
+
   const sceneApiRef = useRef<{
-    rebuildDynamicContent: () => void;
+    rebuildDynamicContent: (force?: boolean) => void;
     applyCameraPreset: (preset: CameraPresetId) => void;
     requestRender: () => void;
   } | null>(null);
@@ -178,6 +196,7 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
     const mount = webglMountRef.current;
     if (!mount) return;
 
+    const isSoftwareGl = detectIsSoftwareGl();
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({
@@ -298,29 +317,38 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
       camTransitionActive = false;
     });
 
-    let frameId = 0;
+    let rafId = 0;
+    let timerId = 0;
     let renderBusy = false;
     let renderDirty = false;
     let unmounted = false;
 
     function afterDraw(cb: () => void) {
       const gl = renderer.getContext() as WebGL2RenderingContext;
-      if (gl && typeof gl.fenceSync === 'function') {
+      if (gl && !gl.isContextLost() && typeof gl.fenceSync === 'function') {
         const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
         gl.flush();
+        let polls = 0;
         const poll = () => {
-          if (unmounted) return;
-          const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
-          if (state === gl.UNSIGNALED) {
-            frameId = window.setTimeout(poll, 5);
+          if (unmounted) {
+            if (sync) gl.deleteSync(sync);
+            return;
+          }
+          polls += 1;
+          const waitStatus =
+            sync && typeof gl.clientWaitSync === 'function'
+              ? gl.clientWaitSync(sync, gl.SYNC_FLUSH_COMMANDS_BIT, 0)
+              : gl.ALREADY_SIGNALED;
+          if (waitStatus === gl.TIMEOUT_EXPIRED && polls < 4) {
+            timerId = window.setTimeout(poll, 4);
           } else {
             if (sync) gl.deleteSync(sync);
-            frameId = window.setTimeout(cb, 80);
+            timerId = window.setTimeout(cb, 16);
           }
         };
-        frameId = window.setTimeout(poll, 5);
+        timerId = window.setTimeout(poll, 4);
       } else {
-        frameId = window.setTimeout(cb, 80);
+        timerId = window.setTimeout(cb, 16);
       }
     }
 
@@ -331,7 +359,7 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
         return;
       }
       renderBusy = true;
-      frameId = requestAnimationFrame(() => {
+      rafId = requestAnimationFrame(() => {
         if (unmounted) return;
         renderDirty = false;
         const nowMs = performance.now();
@@ -391,7 +419,11 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
       return m;
     };
 
-    function rebuildDynamicContent() {
+    function rebuildDynamicContent(force = false) {
+      if (epochElisionAdmissible(syncedWebglEpochRef.current, sceneEpochRef.current, force)) {
+        return;
+      }
+      syncedWebglEpochRef.current = sceneEpochRef.current;
       clearDynamicContent();
       const p = propsRef.current;
 
@@ -652,7 +684,7 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           }
         }
       } else if (p.sceneMode === 'surface-code') {
-        // Parametric [[d^2, 1, d]] Topological Surface-Code Cryo-Lattice (d = 3, 5, 7, 9)
+        // Parametric [[d^2, 1, d]] Topological Surface-Code Cryo-Lattice (d = 3, 5, 7, 9, 11)
         const d = inferSurfaceCodeDistance(p.surfaceFaults.length);
         const patch = buildRotatedSurfaceCode(d);
         const syn = extractSurfaceCodeSyndromes(p.surfaceFaults, d);
@@ -889,13 +921,19 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
         desiredCamPos.set(0, 9.6, 2.1);
         desiredTarget.set(0, -0.75, 0);
       } else {
-        const n = Math.max(1, propsRef.current.blochVectors.length);
-        const spacing = Math.min(2.35, 9.6 / n);
-        const startX = -((n - 1) * spacing) * 0.5;
-        const focusX =
-          propsRef.current.sceneMode === 'bloch'
-            ? startX + Math.min(n - 1, propsRef.current.selectedWire) * spacing
+        const total = propsRef.current.blochVectors.length;
+        const focusStart =
+          total > 16
+            ? Math.max(0, Math.min(propsRef.current.selectedWire - 8, total - 16))
             : 0;
+        const visibleCount = Math.max(1, Math.min(16, total - focusStart));
+        const spacing = Math.min(2.35, 10.4 / visibleCount);
+        const startX = -((visibleCount - 1) * spacing) * 0.5;
+        const localIdx = Math.max(
+          0,
+          Math.min(visibleCount - 1, propsRef.current.selectedWire - focusStart),
+        );
+        const focusX = propsRef.current.sceneMode === 'bloch' ? startX + localIdx * spacing : 0;
         desiredCamPos.set(focusX + 1.2, 1.85, 4.2);
         desiredTarget.set(focusX, -0.5, 0.1);
       }
@@ -935,11 +973,20 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
 
+    let contextLost = false;
     const onContextLost = (e: Event) => {
       e.preventDefault();
+      contextLost = true;
       setWebglUnavailable(true);
     };
+    const onContextRestored = () => {
+      contextLost = false;
+      setWebglUnavailable(false);
+      rebuildDynamicContent(true);
+      requestRender();
+    };
     renderer.domElement.addEventListener('webglcontextlost', onContextLost);
+    renderer.domElement.addEventListener('webglcontextrestored', onContextRestored);
 
     let curW = initW;
     let curH = initH;
@@ -953,8 +1000,10 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-      controls.update();
-      renderer.render(scene, camera);
+      if (gpuContextHealthy(contextLost, w > 0 && h > 0)) {
+        controls.update();
+        renderer.render(scene, camera);
+      }
     });
     resizeObserver.observe(mount);
 
@@ -963,18 +1012,19 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
     }
 
     sceneApiRef.current = { rebuildDynamicContent, applyCameraPreset, requestRender };
-    rebuildDynamicContent();
+    rebuildDynamicContent(true);
     controls.update();
     renderer.render(scene, camera);
 
     return () => {
       unmounted = true;
-      cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
+      cancelAnimationFrame(rafId);
+      clearTimeout(timerId);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
+      renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       controls.dispose();
       clearDynamicContent();
       benchTex.dispose();
@@ -989,8 +1039,10 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
 
   // Rebuild dynamic 3D objects whenever quantum state or scene mode changes
   useEffect(() => {
+    sceneEpochRef.current += 1;
     if (renderBackend === 'webgl2') {
       sceneApiRef.current?.rebuildDynamicContent();
+      sceneApiRef.current?.requestRender();
     }
   }, [
     renderBackend,
@@ -1023,10 +1075,17 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
     }
   }, [cameraPreset, renderBackend]);
 
-  // Execute deterministic 16x16 Software Tile PBR rasterizer when active or if WebGL2 is unavailable
+  // Execute deterministic zero-alloc CSR 16x16 Software Tile PBR rasterizer when active or if WebGL2 is unavailable
   useEffect(() => {
     const useTile = renderBackend === 'tile16' || webglUnavailable;
     if (!useTile || !tileCanvasRef.current) return;
+
+    const tileW = 640;
+    const tileH = 368;
+    const expectedLen = tileW * tileH * 4;
+    if (!tileFbRef.current || tileFbRef.current.length !== expectedLen) {
+      tileFbRef.current = new Uint8ClampedArray(expectedLen);
+    }
 
     const tris = buildSoftwareQuantumSceneTriangles({
       sceneMode,
@@ -1036,25 +1095,27 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
       lod,
     });
     const out = rasterizeQuantumSceneTiles({
-      width: 640,
-      height: 368,
+      width: tileW,
+      height: tileH,
       yawRad: tileYaw,
       pitchRad: tilePitch,
       distance: cameraPreset === 'macro' ? 5.2 : 7.8,
       triangles: tris,
       showTileGrid,
+      outPixels: tileFbRef.current,
     });
 
     const canvas = tileCanvasRef.current;
-    canvas.width = out.telemetry.width;
-    canvas.height = out.telemetry.height;
+    if (canvas.width !== out.telemetry.width) canvas.width = out.telemetry.width;
+    if (canvas.height !== out.telemetry.height) canvas.height = out.telemetry.height;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      const img = new ImageData(
-        new Uint8ClampedArray(out.pixels),
-        out.telemetry.width,
-        out.telemetry.height,
+      const pixelView = new Uint8ClampedArray(
+        out.pixels.buffer as ArrayBuffer,
+        out.pixels.byteOffset,
+        out.pixels.byteLength,
       );
+      const img = new ImageData(pixelView, out.telemetry.width, out.telemetry.height);
       ctx.putImageData(img, 0, 0);
     }
     setTileTelemetry(out.telemetry);
@@ -1102,7 +1163,7 @@ export const QuantumViewport3D: React.FC<QuantumViewport3DProps> = ({
           />
           {tileTelemetry && (
             <div className="absolute top-14 right-5 text-xs font-mono tabular-nums text-slate-300 bg-slate-900/95 border border-slate-800 px-3 py-1.5 rounded">
-              <span>16x16 Software Tile PBR</span>
+              <span>16x16 CSR Tile PBR</span>
               <span className="mx-1.5 text-slate-600">·</span>
               <span>
                 {tileTelemetry.activeTiles}/{tileTelemetry.tilesX * tileTelemetry.tilesY} active tiles

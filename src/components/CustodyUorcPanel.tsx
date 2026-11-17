@@ -158,8 +158,8 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800/80 text-xs font-mono tabular-nums">
+          <div className="space-y-1">
             <div className="text-slate-500">#uorc= Snapshot Container</div>
             <div className="font-semibold text-slate-900 dark:text-slate-100">
               b&quot;UORC&quot; · {uorcWireAudit.uorcSnapshotBytes} B ({uorcWireAudit.rawVdntBytes} B raw)
@@ -169,7 +169,7 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+          <div className="space-y-1">
             <div className="text-slate-500">Tamper &amp; Unsealed Refusals</div>
             <div className="font-semibold text-slate-900 dark:text-slate-100">
               1-Bit Flip: {uorcWireAudit.tamperOneBitRefused ? 'Refused' : 'Failed'}
@@ -179,7 +179,7 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+          <div className="space-y-1">
             <div className="text-slate-500">Zero-Decode CDMX CodedMatrix</div>
             <div className="font-semibold text-slate-900 dark:text-slate-100">
               0 Float Allocs · {uorcWireAudit.codedMatrixUorcBytes} B .uorc
@@ -189,7 +189,7 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+          <div className="space-y-1">
             <div className="text-slate-500">Stride-8 Checkpoints &amp; OPFS</div>
             <div className="font-semibold text-slate-900 dark:text-slate-100">
               {uorcWireAudit.stride8CheckpointCount} Checkpoints · {uorcWireAudit.stride8TotalUorcBytes} B
@@ -339,8 +339,8 @@ export const CustodyUorcPanel: React.FC<CustodyUorcPanelProps> = ({
               }
             >
               {stitchRecovery.ok
-                ? `● Bit-Exact Quorum Reconstructed (${stitchRecovery.bytes.byteLength} B)`
-                : `✖ Custody Refused · ${stitchRecovery.reason}`}
+                ? `Bit-Exact Quorum Reconstructed (${stitchRecovery.bytes.byteLength} B)`
+                : `Custody Refused · ${stitchRecovery.reason}`}
             </div>
             <div className="text-slate-400 break-all">
               Expected SHA-256: {stitchBundle.originalSha256}

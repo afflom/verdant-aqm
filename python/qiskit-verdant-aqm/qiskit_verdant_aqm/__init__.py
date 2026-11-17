@@ -15,6 +15,7 @@ from .atlas_utqc import (
 )
 from .backend import (
     ClassicalRegister,
+    DisjointProductSubsystemState,
     HAS_UPSTREAM_QISKIT,
     Parameter,
     QuantumCircuit,
@@ -23,6 +24,9 @@ from .backend import (
     VerdantAqmJob,
     VerdantAqmResult,
     VerdantAqmTarget,
+    detect_host_parallel_lanes,
+    partition_disjoint_circuit_wires,
+    prove_host_saturation,
 )
 from .holo_bridge import (
     HoloArchiveInspection,
@@ -62,6 +66,7 @@ __all__ = [
     "ClassicalRegister",
     "CompiledBraidSegment",
     "DataBin",
+    "DisjointProductSubsystemState",
     "HAS_UPSTREAM_QISKIT",
     "HoloArchiveInspection",
     "HoloWasmGuestRuntime",
@@ -84,12 +89,15 @@ __all__ = [
     "compute_job_kappa",
     "decode_uorc_url_hash",
     "decompress_uorc_portable",
+    "detect_host_parallel_lanes",
     "encode_uorc_url_hash",
     "execute_atlas_holospace_batch",
     "extract_verified_holo_wasm_bytes",
     "inspect_holo_v4_archive",
     "instantiate_holo_wasm_guest",
     "is_uorc_archive",
+    "partition_disjoint_circuit_wires",
+    "prove_host_saturation",
     "verify_atlas_mtc_axioms",
     "verify_uorc_transport_boundary",
     "weave_qasm_with_sk_weaver",

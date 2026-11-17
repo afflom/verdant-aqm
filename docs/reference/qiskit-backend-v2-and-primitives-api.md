@@ -38,9 +38,18 @@
 | `seed_simulator` | `None` | `int \| None` | Deterministic PRNG seed for reproducible `get_counts()` and `get_memory()`. |
 | `memory` | `False` | `bool` | When `True`, records ordered per-shot bitstrings in `Result.get_memory()`. |
 | `prism_fusion` | `True` | `bool` | Applies `AQ-17` $\mathbb{Z}_8$ phase-monoid gate fusion prior to contraction. |
-| `substrate` | `"auto"` | `"auto" \| "StabilizerTableau" \| "CyclotomicExact" \| "ExactMps" \| "ExactSparseContinuum" \| "AtlasHolospace"` | Overrides automatic substrate routing when set explicitly. |
+| `substrate` | `"auto"` | `"auto" \| "StabilizerTableau" \| "DisjointProductState" \| "CyclotomicExact" \| "ExactMps" \| "ExactSparseContinuum" \| "AtlasHolospace"` | Overrides automatic substrate routing when set explicitly. |
 | `weave_atlas` | `False` | `bool` | Synthesizes `SkWeaver` $PU(22)$ topological braid diagnostics for continuous rotations (`AQ-16`). |
 | `max_shots` | `None` | `int \| None` | Optional upper shot bound used by Qiskit option-validator suites. |
+| `max_parallel_threads` | `None` | `int \| None` | Optional thread pool bound; `None` saturates all detected logical host cores (`os.cpu_count()`). |
+
+### Host Saturation & Partition Utilities (`inv017`)
+
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `prove_host_saturation` | `prove_host_saturation() -> dict[str, Any]` | Executes empirical multi-lane throughput benchmarks and returns a BLAKE3 `proof_kappa` attestation. |
+| `detect_host_parallel_lanes` | `detect_host_parallel_lanes(work_units: int, requested_threads: int \| None = None) -> int` | Returns `min(detected_cores, work_units)` without hardcoded concurrency ceilings. |
+| `partition_disjoint_circuit_wires` | `partition_disjoint_circuit_wires(num_qubits: int, ops: Sequence[Any]) -> tuple[list[list[int]], int]` | Factors unentangled connected wire components via Union-Find for $\mathcal{O}(C \cdot 2^{\max |c|})$ execution. |
 
 ## 28-Instruction `VerdantAqmTarget` ISA
 

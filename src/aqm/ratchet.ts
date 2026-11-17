@@ -12,6 +12,17 @@
  *   6. `max_engine_rust_magic_literal_count = 0`
  */
 
+import {
+  AQM_WORKLOAD_OPTIMIZATION_TIERS,
+  WorkloadOptimizationTierSpec,
+  epochElisionAdmissible,
+  governorRecommendedScalePermille,
+  planHostLaneSaturation,
+  verifyWorkloadOptimizationTiers,
+  watchdogWithinBound,
+  workerInFlightAdmissible,
+} from './hostSaturation';
+import { verifyCsrTilePrefixMonotonic } from './tileRasterizer';
 import { ModeledAqmError, ParametricRatchetErrorKind } from './types';
 
 export const RATCHET_SPEC_ID = 'prism/parametric-ratchet/1';
@@ -50,10 +61,21 @@ export interface RatchetViolationDetail {
     | 'classical-choice'
     | 'ungrounded-lex-module'
     | 'domain-lex-magic-literal'
-    | 'engine-rust-magic-literal';
+    | 'engine-rust-magic-literal'
+    | 'performance-saturation-violation';
   readonly path: string;
   readonly token: string;
   readonly line?: number;
+}
+
+export interface PerformanceSaturationAuditSummary {
+  readonly ok: boolean;
+  readonly optimizationTiersVerified: number;
+  readonly optimizationTiersTotal: number;
+  readonly arbitraryConcurrencyCapCount: number;
+  readonly csrMonotonicVerified: boolean;
+  readonly governorAndWatchdogVerified: boolean;
+  readonly hostLaneScalingVerified: boolean;
 }
 
 export interface ParametricRatchetAuditReport {
@@ -70,6 +92,7 @@ export interface ParametricRatchetAuditReport {
   readonly ceilings: ParametricRatchetCeilings;
   readonly groundedLexModuleCount: number;
   readonly auditedRustFileCount: number;
+  readonly performanceSaturation: PerformanceSaturationAuditSummary;
   readonly violations: readonly RatchetViolationDetail[];
   readonly error?: ModeledAqmError;
 }
@@ -78,6 +101,7 @@ export interface RatchetWorkspaceSnapshot {
   readonly ratchetToml: string;
   readonly lexFilesByPath: Readonly<Record<string, string>>;
   readonly rustFilesByPath: Readonly<Record<string, string>>;
+  readonly optimizationTiersOverride?: readonly WorkloadOptimizationTierSpec[];
 }
 
 const ALLOWED_TOP_KEYS = new Set([
@@ -492,7 +516,8 @@ export function scanRustMagicLiterals(
 }
 
 /**
- * Evaluates all 6 permanent zero ceilings of `prism/parametric-ratchet/1` (`FI-08` / `AQ-23`).
+ * Evaluates all 6 permanent zero ceilings of `prism/parametric-ratchet/1` (`FI-08` / `AQ-23`)
+ * PLUS the 8-tier `WorkloadOptimizationSpec` & Host-Resource Saturation laws (`inv017HostResourceSaturationAndStability`).
  */
 export function evaluateParametricRatchet(
   workspace: RatchetWorkspaceSnapshot,
@@ -520,6 +545,15 @@ export function evaluateParametricRatchet(
       },
       groundedLexModuleCount: 0,
       auditedRustFileCount: 0,
+      performanceSaturation: {
+        ok: false,
+        optimizationTiersVerified: 0,
+        optimizationTiersTotal: AQM_WORKLOAD_OPTIMIZATION_TIERS.length,
+        arbitraryConcurrencyCapCount: 0,
+        csrMonotonicVerified: false,
+        governorAndWatchdogVerified: false,
+        hostLaneScalingVerified: false,
+      },
       violations: [
         {
           category: 'config-schema',
@@ -653,6 +687,7 @@ export function evaluateParametricRatchet(
   const rustRoots = [cfg.engine_rust_root, ...cfg.additional_rust_roots];
   let engineRustMagicLiteralCount = 0;
   let auditedRustFileCount = 0;
+  let arbitraryConcurrencyCapCount = 0;
 
   for (const [rustPath, rustContent] of Object.entries(workspace.rustFilesByPath)) {
     if (rustRoots.some((root) => rustPath.startsWith(root))) {
@@ -660,11 +695,82 @@ export function evaluateParametricRatchet(
       const rustV = scanRustMagicLiterals(rustPath, rustContent);
       engineRustMagicLiteralCount += rustV.length;
       violations.push(...rustV);
+
+      const scrubbedRust = scrubRustCommentsAndStrings(rustContent);
+      const capMatch = /\b(?:MAX_WORKERS|MAX_THREADS|ARBITRARY_LANE_CAP)\b/.exec(scrubbedRust);
+      if (capMatch) {
+        arbitraryConcurrencyCapCount += 1;
+        violations.push({
+          category: 'performance-saturation-violation',
+          path: rustPath,
+          token: capMatch[0],
+        });
+      }
     }
+  }
+
+  // Constructive Performance & Host-Resource Saturation Ratchet Checks (`VE-33..VE-36` / `inv017`)
+  const activeTiers = workspace.optimizationTiersOverride ?? AQM_WORKLOAD_OPTIMIZATION_TIERS;
+  const tierAudit = verifyWorkloadOptimizationTiers(activeTiers);
+  for (const badTier of tierAudit.failedTierIds) {
+    violations.push({
+      category: 'performance-saturation-violation',
+      path: 'src/aqm/hostSaturation.ts',
+      token: `unoptimized-tier:${badTier}`,
+    });
+  }
+
+  const csrMonotonicVerified =
+    verifyCsrTilePrefixMonotonic(
+      new Int32Array([2, 0, 3, 1]),
+      new Int32Array([0, 2, 2, 5, 6]),
+      4,
+      6,
+    ) &&
+    !verifyCsrTilePrefixMonotonic(
+      new Int32Array([2, 0, 3, 1]),
+      new Int32Array([0, 2, 3, 5, 6]),
+      4,
+      6,
+    );
+
+  const governorAndWatchdogVerified =
+    governorRecommendedScalePermille(12_000, 16_667) === 1000 &&
+    governorRecommendedScalePermille(24_000, 16_667) === 850 &&
+    governorRecommendedScalePermille(40_000, 16_667) === 700 &&
+    epochElisionAdmissible(9, 9, false) === true &&
+    epochElisionAdmissible(9, 9, true) === false &&
+    workerInFlightAdmissible(2) === true &&
+    workerInFlightAdmissible(3) === false &&
+    watchdogWithinBound(15_000, 15_000) === true &&
+    watchdogWithinBound(15_001, 15_000) === false;
+
+  const satPlan64 = planHostLaneSaturation(64, 256);
+  const satPlanSmall = planHostLaneSaturation(64, 6);
+  const hostLaneScalingVerified =
+    satPlan64.optimalVerified &&
+    satPlan64.activeLanes === 64 &&
+    satPlanSmall.optimalVerified &&
+    satPlanSmall.activeLanes === 6;
+
+  const perfOk =
+    tierAudit.ok &&
+    arbitraryConcurrencyCapCount === 0 &&
+    csrMonotonicVerified &&
+    governorAndWatchdogVerified &&
+    hostLaneScalingVerified;
+
+  if (!csrMonotonicVerified || !governorAndWatchdogVerified || !hostLaneScalingVerified) {
+    violations.push({
+      category: 'performance-saturation-violation',
+      path: 'src/aqm/hostSaturation.ts',
+      token: 'runtime-governor-or-saturation-law-failed',
+    });
   }
 
   const ok =
     violations.length === 0 &&
+    perfOk &&
     ontologyRootLiteralGtOneCount <= cfg.ceilings.max_ontology_root_literal_gt_one_count &&
     ontologyRootStringFieldCount <= cfg.ceilings.max_ontology_root_string_field_count &&
     classicalChoiceCount <= cfg.ceilings.max_classical_choice_count &&
@@ -708,6 +814,15 @@ export function evaluateParametricRatchet(
     ceilings: cfg.ceilings,
     groundedLexModuleCount: groundedPaths.size,
     auditedRustFileCount,
+    performanceSaturation: {
+      ok: perfOk,
+      optimizationTiersVerified: tierAudit.verifiedCount,
+      optimizationTiersTotal: activeTiers.length,
+      arbitraryConcurrencyCapCount,
+      csrMonotonicVerified,
+      governorAndWatchdogVerified,
+      hostLaneScalingVerified,
+    },
     violations,
     error,
   };
@@ -715,7 +830,8 @@ export function evaluateParametricRatchet(
 
 /**
  * Verifies that planting a defect into ANY of the 6 `prism/parametric-ratchet/1` zero ceilings
- * deterministically trips the ratchet and restores cleanly on baseline.
+ * OR any of the 2 host-saturation / zero-alloc performance ratchet gates deterministically trips
+ * the ratchet and restores cleanly on baseline (`8/8` planted cases).
  */
 export function verifyParametricRatchetPlantedDefects(
   baseWorkspace: RatchetWorkspaceSnapshot,
@@ -785,9 +901,28 @@ export function verifyParametricRatchetPlantedDefects(
     ),
   });
 
-  const allCaught = !c1.ok && !c2.ok && !c3.ok && !c4.ok && !c5.ok && !c6.ok;
+  // Case 7: Plant an arbitrary concurrency cap identifier in `crates/verdant-aqm/src/saturation.rs`
+  const c7 = evaluateParametricRatchet({
+    ...baseWorkspace,
+    rustFilesByPath: {
+      ...baseWorkspace.rustFilesByPath,
+      'crates/verdant-aqm/src/saturation.rs': `${baseWorkspace.rustFilesByPath['crates/verdant-aqm/src/saturation.rs'] ?? ''}\npub const MAX_WORKERS: usize = 1_usize;\n`,
+    },
+  });
+
+  // Case 8: Plant a per-frame heap allocation regression into one of the 8 WorkloadOptimizationSpec tiers
+  const c8 = evaluateParametricRatchet({
+    ...baseWorkspace,
+    optimizationTiersOverride: AQM_WORKLOAD_OPTIMIZATION_TIERS.map((t, idx) =>
+      idx === 4 ? { ...t, zeroPerFrameHeapAllocs: false } : t,
+    ),
+  });
+
+  const allCaught =
+    !c1.ok && !c2.ok && !c3.ok && !c4.ok && !c5.ok && !c6.ok && !c7.ok && !c8.ok;
   return {
     allCaughtAndRestored: allCaught && baseline.ok,
-    casesVerified: 6,
+    casesVerified: 8,
   };
 }
+

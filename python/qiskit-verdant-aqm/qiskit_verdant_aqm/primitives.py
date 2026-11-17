@@ -8,6 +8,7 @@ Implements `AQ-20` (`qiskit_primitives_v2_exact`):
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import math
 import random
 import re
@@ -17,10 +18,12 @@ from typing import Any, Sequence
 _NON_IDENTITY_PAULI_RE = re.compile(r"[^I]")
 
 from .backend import (
+    DisjointProductSubsystemState,
     ExactMpsTensorTrain,
     PackedStabilizerTableau,
     VerdantAqmBackend,
     compute_exact_mps_pauli_expectation,
+    detect_host_parallel_lanes,
     normalize_circuit,
 )
 from .holo_bridge import compute_job_kappa
@@ -176,6 +179,48 @@ def _compute_pauli_expectation_sparse(
         term = bra.conjugate() * (sign * i_phase * amp)
         acc += term.real
     return acc
+
+
+def _compute_pauli_expectation_disjoint_subsystems(
+    state: DisjointProductSubsystemState, pauli_label: str
+) -> float:
+    """Evaluates `<bigotimes_c psi_c | P | bigotimes_c psi_c> = prod_c <psi_c | P_c | psi_c>`."""
+    p_str = pauli_label.strip().upper()
+    n = state.num_qubits
+    if len(p_str) != n:
+        raise ValueError(
+            f"Pauli observable '{p_str}' length ({len(p_str)}) must equal circuit num_qubits ({n})."
+        )
+
+    comp_chars: dict[int, list[str]] = {}
+    for m in _NON_IDENTITY_PAULI_RE.finditer(p_str):
+        idx = m.start()
+        ch = m.group(0)
+        q = n - 1 - idx
+        loc = state.wire_to_comp.get(q)
+        if loc is None:
+            # Untouched wire in |0>: <0|X|0> = <0|Y|0> = 0, <0|Z|0> = +1
+            if ch in ("X", "Y"):
+                return 0.0
+            if ch == "Z":
+                continue
+            raise ValueError(f"Unsupported Pauli character '{ch}' in '{p_str}'.")
+        c_idx, l_wire = loc
+        buf = comp_chars.get(c_idx)
+        if buf is None:
+            comp_len = len(state.subsystems[c_idx][0])
+            buf = ["I"] * comp_len
+            comp_chars[c_idx] = buf
+        buf[len(buf) - 1 - l_wire] = ch
+
+    product = 1.0
+    for c_idx, buf in comp_chars.items():
+        comp_wires, sub_amps = state.subsystems[c_idx]
+        sub_ev = _compute_pauli_expectation_sparse(sub_amps, len(comp_wires), "".join(buf))
+        if abs(sub_ev) < 1e-16:
+            return 0.0
+        product *= sub_ev
+    return product
 
 
 def _compute_pauli_expectation_clifford_adjoint(
@@ -392,8 +437,11 @@ class VerdantAqmSamplerV2:
         self.backend = backend or VerdantAqmBackend(shots=self.default_shots, seed_simulator=seed)
 
     def run(self, pubs: Sequence[Any], *, shots: int | None = None) -> _PrimitiveJob:
-        pub_results: list[PubResult] = []
-        for pub in pubs:
+        host_cpus = detect_host_parallel_lanes(getattr(self.backend.options, "max_parallel_threads", None))
+        pub_lanes = min(host_cpus, max(1, len(pubs)))
+        inner_lanes = max(1, host_cpus // pub_lanes)
+
+        def _eval_sampler_pub(pub: Any) -> PubResult:
             if isinstance(pub, tuple) or isinstance(pub, list):
                 qc_raw = pub[0]
                 param_vals = pub[1] if len(pub) > 1 else None
@@ -407,23 +455,37 @@ class VerdantAqmSamplerV2:
             eff_shots = pub_shots or shots or self.default_shots
             sweeps = _normalize_param_sweeps(norm_qc.parameters, param_vals)
             res = self.backend.run(
-                norm_qc, shots=eff_shots, memory=True, parameter_binds=sweeps
+                norm_qc,
+                shots=eff_shots,
+                memory=True,
+                parameter_binds=sweeps,
+                max_parallel_threads=inner_lanes,
             ).result()
             exp = res.results[0]
             all_mem: list[str] = []
             for b_idx in range(len(res.results)):
                 all_mem.extend(res.get_memory(b_idx))
             ba = BitArray(all_mem, norm_qc.num_clbits)
-            pub_results.append(
-                PubResult(
-                    data=DataBin(meas=ba, c=ba),
-                    metadata={
-                        "shots": eff_shots * len(sweeps),
-                        "substrate": exp.metadata["substrate"],
-                        "holo_kappa": exp.metadata["holo_kappa"],
-                    },
-                )
-            )
+            meta: dict[str, Any] = {
+                "shots": eff_shots * len(sweeps),
+                "substrate": exp.metadata["substrate"],
+                "holo_kappa": exp.metadata["holo_kappa"],
+                "host_logical_cpus": host_cpus,
+                "parallel_lanes_saturated": max(
+                    pub_lanes, int(exp.metadata.get("parallel_lanes_saturated", 1))
+                ),
+            }
+            if exp.metadata.get("disjoint_tensor_factorized"):
+                meta["subsystem_components"] = exp.metadata["subsystem_components"]
+                meta["disjoint_tensor_factorized"] = True
+            return PubResult(data=DataBin(meas=ba, c=ba), metadata=meta)
+
+        if pub_lanes > 1 and len(pubs) > 1:
+            with ThreadPoolExecutor(max_workers=pub_lanes) as pool:
+                pub_results = list(pool.map(_eval_sampler_pub, pubs))
+        else:
+            pub_results = [_eval_sampler_pub(p) for p in pubs]
+
         jid = f"sampler-v2-{compute_job_kappa({'pubs': len(pub_results)}).split(':')[1][:16]}"
         return _PrimitiveJob(jid, pub_results)
 
@@ -445,14 +507,22 @@ class VerdantAqmEstimatorV2:
 
     def run(self, pubs: Sequence[Any], *, precision: float | None = None) -> _PrimitiveJob:
         rng = random.Random(self._seed)
-        results: list[PubResult] = []
+        host_cpus = detect_host_parallel_lanes(getattr(self.backend.options, "max_parallel_threads", None))
 
+        # Pre-normalize PUBs and pre-draw Gaussian noise on the caller thread for 100% deterministic multi-lane parity
+        prepared_pubs: list[
+            tuple[Any, list[dict[str, float]], bool, list[Any], float, list[list[float]]]
+        ] = []
         for pub in pubs:
             qc_raw = pub[0]
             obs_raw = pub[1]
             param_vals = pub[2] if len(pub) > 2 else None
             pub_prec = float(pub[3]) if len(pub) > 3 and pub[3] is not None else None
-            eff_prec = pub_prec if pub_prec is not None else (precision if precision is not None else self.default_precision)
+            eff_prec = (
+                pub_prec
+                if pub_prec is not None
+                else (precision if precision is not None else self.default_precision)
+            )
             if eff_prec < 0.0:
                 raise ValueError(f"Target precision must be >= 0.0, got {eff_prec}")
 
@@ -460,15 +530,32 @@ class VerdantAqmEstimatorV2:
             sweeps = _normalize_param_sweeps(norm_qc.parameters, param_vals)
             multi_obs = _is_observable_sequence(obs_raw)
             obs_list = list(obs_raw) if multi_obs else [obs_raw]
+            z_draws: list[list[float]] = []
+            if eff_prec > 0.0:
+                for _ in range(len(sweeps)):
+                    z_draws.append([rng.gauss(0.0, 1.0) for _ in range(len(obs_list))])
+            prepared_pubs.append((norm_qc, sweeps, multi_obs, obs_list, eff_prec, z_draws))
 
-            evs: list[float] = []
-            stds: list[float] = []
-            last_sub = "CyclotomicExact"
+        pub_lanes = min(host_cpus, max(1, len(prepared_pubs)))
+        inner_lanes = max(1, host_cpus // pub_lanes)
 
-            for bind_map in sweeps:
+        def _eval_estimator_pub(
+            prep: tuple[Any, list[dict[str, float]], bool, list[Any], float, list[list[float]]]
+        ) -> PubResult:
+            norm_qc, sweeps, multi_obs, obs_list, eff_prec, z_draws = prep
+            sweep_lanes = min(inner_lanes, max(1, len(sweeps)))
+
+            def _eval_sweep(idx_and_bind: tuple[int, dict[str, float]]) -> tuple[str, list[float], list[float], int | None]:
+                s_idx, bind_map = idx_and_bind
                 sub, state_obj, _ = self.backend.evaluate_exact_state(norm_qc, bind_map)
-                last_sub = sub
-                for obs in obs_list:
+                comp_cnt = (
+                    len(state_obj.subsystems)
+                    if isinstance(state_obj, DisjointProductSubsystemState)
+                    else None
+                )
+                s_evs: list[float] = []
+                s_stds: list[float] = []
+                for o_idx, obs in enumerate(obs_list):
                     terms = _normalize_obs_terms(obs)
                     exact_ev = 0.0
                     var_sum = 0.0
@@ -477,6 +564,8 @@ class VerdantAqmEstimatorV2:
                             texp = _compute_pauli_expectation_clifford_adjoint(
                                 state_obj, norm_qc.num_qubits, p_lbl
                             )
+                        elif isinstance(state_obj, DisjointProductSubsystemState):
+                            texp = _compute_pauli_expectation_disjoint_subsystems(state_obj, p_lbl)
                         elif isinstance(state_obj, ExactMpsTensorTrain):
                             texp = compute_exact_mps_pauli_expectation(state_obj, p_lbl)
                         elif isinstance(state_obj, PackedStabilizerTableau):
@@ -487,30 +576,60 @@ class VerdantAqmEstimatorV2:
                         var_sum += coeff * coeff * max(0.0, 1.0 - texp * texp)
 
                     if eff_prec == 0.0:
-                        evs.append(0.0 if abs(exact_ev) < 1e-15 else exact_ev)
-                        stds.append(0.0)
+                        s_evs.append(0.0 if abs(exact_ev) < 1e-15 else exact_ev)
+                        s_stds.append(0.0)
                     else:
-                        shots = max(16, math.ceil(1.0 / (eff_prec * eff_prec)))
-                        std = math.sqrt(var_sum / shots)
-                        evs.append(rng.gauss(exact_ev, std))
-                        stds.append(std)
+                        shots_eq = max(16, math.ceil(1.0 / (eff_prec * eff_prec)))
+                        std = math.sqrt(var_sum / shots_eq)
+                        s_evs.append(exact_ev + std * z_draws[s_idx][o_idx])
+                        s_stds.append(std)
+                return (sub, s_evs, s_stds, comp_cnt)
+
+            indexed_sweeps = list(enumerate(sweeps))
+            if sweep_lanes > 1 and len(indexed_sweeps) > 1:
+                with ThreadPoolExecutor(max_workers=sweep_lanes) as pool:
+                    sweep_outs = list(pool.map(_eval_sweep, indexed_sweeps))
+            else:
+                sweep_outs = [_eval_sweep(item) for item in indexed_sweeps]
+
+            evs: list[float] = []
+            stds: list[float] = []
+            last_sub = "CyclotomicExact"
+            disjoint_comps: int | None = None
+            for sub, s_evs, s_stds, comp_cnt in sweep_outs:
+                last_sub = sub
+                evs.extend(s_evs)
+                stds.extend(s_stds)
+                if comp_cnt is not None:
+                    disjoint_comps = comp_cnt
 
             scalar = (not multi_obs) and len(sweeps) == 1
             kappa = compute_job_kappa({"circuit": norm_qc.name, "evs": evs, "precision": eff_prec})
-            results.append(
-                PubResult(
-                    data=DataBin(
-                        evs=evs[0] if scalar else evs,
-                        stds=stds[0] if scalar else stds,
-                    ),
-                    metadata={
-                        "target_precision": eff_prec,
-                        "exact_analytical": eff_prec == 0.0,
-                        "substrate": last_sub,
-                        "holo_kappa": kappa,
-                    },
-                )
+            meta: dict[str, Any] = {
+                "target_precision": eff_prec,
+                "exact_analytical": eff_prec == 0.0,
+                "substrate": last_sub,
+                "holo_kappa": kappa,
+                "host_logical_cpus": host_cpus,
+                "parallel_lanes_saturated": max(pub_lanes, sweep_lanes),
+            }
+            if disjoint_comps is not None:
+                meta["subsystem_components"] = disjoint_comps
+                meta["disjoint_tensor_factorized"] = True
+
+            return PubResult(
+                data=DataBin(
+                    evs=evs[0] if scalar else evs,
+                    stds=stds[0] if scalar else stds,
+                ),
+                metadata=meta,
             )
+
+        if pub_lanes > 1 and len(prepared_pubs) > 1:
+            with ThreadPoolExecutor(max_workers=pub_lanes) as pool:
+                results = list(pool.map(_eval_estimator_pub, prepared_pubs))
+        else:
+            results = [_eval_estimator_pub(prep) for prep in prepared_pubs]
 
         jid = f"estimator-v2-{compute_job_kappa({'pubs': len(results)}).split(':')[1][:16]}"
         return _PrimitiveJob(jid, results)

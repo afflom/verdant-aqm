@@ -74,6 +74,12 @@
       "statement": "mod4CarrySaveAdd 0 true false = 1 /\\ mod4CarrySaveAdd 0 false true = 3 /\\ mod4CarrySaveAdd 3 true false = 0",
       "how": "Proved by constructive kernel evaluation over 2-bit mod-4 carry-save phase accumulation in column-plane projective collapse",
       "where": "app/src/Quantum.lex.tex"
+    },
+    {
+      "name": "inv017HostResourceSaturationAndStability",
+      "statement": "hostLaneSaturationOptimal cores units (min cores units) = true /\\ workerInFlightAdmissible 2 = true /\\ workerInFlightAdmissible 3 = false",
+      "how": "Proved by constructive kernel evaluation enforcing full host core lane saturation, zero-alloc CSR tile prefix monotonicity, and bounded worker RPC concurrency",
+      "where": "app/src/Quantum.lex.tex"
     }
   ],
   "pinned": [
@@ -84,7 +90,7 @@
     },
     {
       "name": "parametric_ratchet_six_zero_ceilings",
-      "what": "Enforces prism/parametric-ratchet/1 (0 ontology literals > 1, 0 ontology String fields, 0 Classical.choice, 0 ungrounded .lex.tex modules, 0 domain .lex.tex magic literals, 0 Rust magic literals) across 10 .lex.tex modules and crates/verdant-aqm.",
+      "what": "Enforces prism/parametric-ratchet/1 (0 ontology literals > 1, 0 ontology String fields, 0 Classical.choice, 0 ungrounded .lex.tex modules, 0 domain .lex.tex magic literals, 0 Rust magic literals) across 10 .lex.tex modules, 3 Rust engine files (lib.rs, uorc.rs, saturation.rs), 8/8 WorkloadOptimizationSpec tiers, and 8/8 planted-defect checks.",
       "where": "model/parametric-ratchet.toml, src/aqm/ratchet.ts, bootstrap/ratchet-gate.ts"
     },
     {

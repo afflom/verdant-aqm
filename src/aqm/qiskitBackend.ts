@@ -25,6 +25,14 @@ import {
 } from './cyclotomic';
 import { runWasmSymplecticCommute } from './holoGuest';
 import {
+  detectHostEnvironment,
+  HostLaneSaturationPlan,
+  partitionDisjointCircuitWires,
+  planHostLaneSaturation,
+  proveHostRooflineSaturation,
+  saturateHostParallelAsync,
+} from './hostSaturation';
+import {
   ExactMpsState,
   computeExactMpsPauliExpectation,
   executeExactMpsBatch,
@@ -1391,6 +1399,181 @@ function cyclotomicToSparseComplex(cycState: ReturnType<typeof executeCyclotomic
   return out;
 }
 
+export interface DisjointSubsystemComponentState {
+  readonly compIdx: number;
+  readonly wires: readonly number[];
+  readonly sparseState: SparseComplexMap;
+  readonly normExactOne: boolean;
+  readonly fusionEliminated: number;
+}
+
+export interface DisjointProductState {
+  readonly numQubits: number;
+  readonly activeWireCount: number;
+  readonly subsystems: readonly DisjointSubsystemComponentState[];
+  readonly wireToComponent: ReadonlyMap<number, { readonly compIdx: number; readonly localWire: number }>;
+  readonly totalActiveKets: number;
+  readonly totalFusionEliminated: number;
+  readonly normExactOne: boolean;
+}
+
+/**
+ * Factors arbitrary non-Clifford circuits with `>= 2` unentangled wire components (`activeWireCount > 12`,
+ * `maxComponentQubits <= 16`) into exact independent local Hilbert subsystems (`O(C * 2^max_c)` instead of `O(2^N)`).
+ */
+export function evaluateDisjointProductSubsystems(
+  unitaryInstructions: readonly QiskitInstruction[],
+  numQubits: number,
+  bindings: Readonly<Record<string, number>>,
+  isPureClifford: boolean,
+  isExactCyclotomic: boolean,
+  prismFusion: boolean,
+): DisjointProductState | null {
+  if (isPureClifford) return null;
+  const nonTrivial = unitaryInstructions.filter((inst) => {
+    const canon = ISA_ALIAS_MAP[inst.name.toLowerCase()] ?? inst.name.toLowerCase();
+    return canon !== 'barrier' && canon !== 'id';
+  });
+  const part = partitionDisjointCircuitWires(
+    numQubits,
+    nonTrivial.map((inst) => inst.qubits),
+  );
+  if (
+    part.components.length < TWO ||
+    part.activeWireCount <= 12 ||
+    part.maxComponentQubits > 16
+  ) {
+    return null;
+  }
+
+  const compBuckets: QiskitInstruction[][] = Array.from(
+    { length: part.components.length },
+    () => [],
+  );
+  for (const inst of nonTrivial) {
+    if (inst.qubits.length === 0) continue;
+    const loc0 = part.wireToComponent.get(inst.qubits[0]);
+    if (!loc0) continue;
+    compBuckets[loc0.compIdx].push({
+      ...inst,
+      qubits: inst.qubits.map((q) => part.wireToComponent.get(q)!.localWire),
+    });
+  }
+
+  const subsystems: DisjointSubsystemComponentState[] = [];
+  let totalActiveKets = 0;
+  let totalFusionEliminated = 0;
+  let allNormExact = true;
+
+  for (let cIdx = 0; cIdx < part.components.length; cIdx += 1) {
+    const wires = part.components[cIdx];
+    const localInstrs = compBuckets[cIdx];
+    if (isExactCyclotomic) {
+      const rawSteps = decomposeExactQiskitUnitaryPrefix(localInstrs, bindings);
+      const fused = prismFusion
+        ? optimizeCircuitPrismMonoid({
+            name: `sub-${cIdx}`,
+            description: 'Disjoint cyclotomic subsystem',
+            qubitCount: wires.length,
+            seed: 1,
+            backend: AqmBackendMode.CyclotomicExact,
+            steps: rawSteps,
+          })
+        : null;
+      const execSteps = fused && fused.ok ? fused.optimizedSpec.steps : rawSteps;
+      const fusionElim = fused && fused.ok ? fused.gatesEliminated : 0;
+      const cyc = executeCyclotomicBatch(Math.max(1, wires.length), execSteps);
+      const normSq = computeExactTotalNormSqSparse(cyc.support);
+      const normOk = normSq.p === cyc.normDenom.p && normSq.q === cyc.normDenom.q;
+      const sparseState = cyclotomicToSparseComplex(cyc);
+      totalActiveKets += sparseState.size;
+      totalFusionEliminated += fusionElim;
+      if (!normOk) allNormExact = false;
+      subsystems.push({
+        compIdx: cIdx,
+        wires,
+        sparseState,
+        normExactOne: normOk,
+        fusionEliminated: fusionElim,
+      });
+    } else {
+      let sparse: SparseComplexMap = new Map([[0n, [1, 0]]]);
+      for (const inst of localInstrs) {
+        sparse = applyQiskitUnitaryInstructionSparse(sparse, inst, bindings);
+      }
+      let mass = 0;
+      for (const [, [r, im]] of sparse) mass += r * r + im * im;
+      const normOk = Math.abs(mass - 1) < 1e-11;
+      totalActiveKets += sparse.size;
+      if (!normOk) allNormExact = false;
+      subsystems.push({
+        compIdx: cIdx,
+        wires,
+        sparseState: sparse,
+        normExactOne: normOk,
+        fusionEliminated: 0,
+      });
+    }
+  }
+
+  return {
+    numQubits,
+    activeWireCount: part.activeWireCount,
+    subsystems,
+    wireToComponent: part.wireToComponent,
+    totalActiveKets,
+    totalFusionEliminated,
+    normExactOne: allNormExact,
+  };
+}
+
+export function computeExactPauliExpectationDisjointSubsystems(
+  productState: DisjointProductState,
+  pauliStr: string,
+): number {
+  const clean = pauliStr.trim().toUpperCase();
+  const n = productState.numQubits;
+  if (clean.length !== n) {
+    throw new Error(
+      `QiskitBackendError::MalformedPauliObservableArity: Pauli string '${pauliStr}' length ${clean.length} != num_qubits ${n}.`,
+    );
+  }
+  const compPaulis = new Map<number, string[]>();
+  for (let q = 0; q < n; q += 1) {
+    const ch = clean[n - 1 - q];
+    if (ch === 'I') continue;
+    if (ch !== 'X' && ch !== 'Y' && ch !== 'Z') {
+      throw new Error(`Invalid Pauli character '${ch}' in '${pauliStr}'`);
+    }
+    const loc = productState.wireToComponent.get(q);
+    if (!loc) {
+      if (ch === 'X' || ch === 'Y') return 0;
+      continue;
+    }
+    let chars = compPaulis.get(loc.compIdx);
+    if (!chars) {
+      const wLen = productState.subsystems[loc.compIdx].wires.length;
+      chars = new Array<string>(wLen).fill('I');
+      compPaulis.set(loc.compIdx, chars);
+    }
+    chars[chars.length - 1 - loc.localWire] = ch;
+  }
+
+  let prodExp = 1.0;
+  for (const [compIdx, chars] of compPaulis) {
+    const sub = productState.subsystems[compIdx];
+    const subExp = computeExactPauliExpectationSparse(
+      sub.sparseState,
+      sub.wires.length,
+      chars.join(''),
+      null,
+    );
+    prodExp *= subExp;
+    if (Math.abs(prodExp) < 1e-30) return 0;
+  }
+  return prodExp;
+}
+
 /** Computes exact `<psi | P | psi> in {-1, 0, +1}` directly via O(|gates|) Heisenberg adjoint Pauli conjugation */
 function computeStabilizerPauliExpectation(
   circuit: QiskitCircuitDefinition,
@@ -1530,6 +1713,10 @@ export interface QiskitExperimentResult {
     readonly norm_exact_one: boolean;
     readonly holo_kappa: string;
     readonly sk_weaver_max_residual?: number;
+    readonly host_logical_cpus?: number;
+    readonly parallel_lanes_saturated?: number;
+    readonly subsystem_components?: number;
+    readonly disjoint_tensor_factorized?: boolean;
   };
 }
 
@@ -1736,6 +1923,10 @@ export class VerdantAqmBackend {
       ? runOptions.parameter_binds
       : [{}];
 
+    const hostEnv = detectHostEnvironment();
+    const totalWorkUnits = Math.max(1, circuits.length * bindsList.length);
+    const satPlan = planHostLaneSaturation(hostEnv.logicalCores, totalWorkUnits);
+
     const expResults: QiskitExperimentResult[] = [];
     let expIdx = 0;
 
@@ -1765,6 +1956,8 @@ export class VerdantAqmBackend {
             prismFusion: useFusion,
             forcedSubstrate: runOptions.substrate ?? this.options.substrate,
             weaveAtlas,
+            hostLogicalCpus: hostEnv.logicalCores,
+            parallelLanesSaturated: satPlan.activeLanes,
           }),
         );
       }
@@ -1792,6 +1985,119 @@ export class VerdantAqmBackend {
     );
   }
 
+  /**
+   * Executes a multi-circuit / parameter-sweep batch across all detected host compute lanes (`saturateHostParallelAsync`),
+   * returning deterministic `VerdantAqmJob` + `HostLaneSaturationPlan` telemetry.
+   */
+  public async runHostSaturatedBatchAsync(
+    circuitsInput:
+      | QiskitCircuitDefinition
+      | QuantumCircuitBuilder
+      | readonly (QiskitCircuitDefinition | QuantumCircuitBuilder)[],
+    runOptions: Partial<VerdantAqmBackendOptions> & {
+      parameter_binds?: ReadonlyArray<Readonly<Record<string, number>>>;
+      detected_cores_override?: number;
+    } = {},
+  ): Promise<{
+    readonly job: VerdantAqmJob;
+    readonly saturationPlan: HostLaneSaturationPlan;
+  }> {
+    const rawList = Array.isArray(circuitsInput) ? circuitsInput : [circuitsInput];
+    const circuits: QiskitCircuitDefinition[] = rawList.map((c) =>
+      c instanceof QuantumCircuitBuilder ? c.build() : c,
+    );
+    const shots = runOptions.shots ?? this.options.shots;
+    const maxShots = runOptions.max_shots ?? this.options.max_shots;
+    if (!Number.isInteger(shots) || shots < 1 || (typeof maxShots === 'number' && shots > maxShots)) {
+      throw new Error(
+        typeof maxShots === 'number'
+          ? `Specified value for 'shots' is not a valid value, must be >=1 and <=${maxShots}`
+          : `Specified value for 'shots' is not a valid value, must be >=1`,
+      );
+    }
+    const baseSeed = runOptions.seed_simulator ?? this.options.seed_simulator ?? 20260519;
+    const recordMemory = runOptions.memory ?? this.options.memory;
+    const useFusion = runOptions.prism_fusion ?? this.options.prism_fusion;
+    const weaveAtlas = runOptions.weave_atlas ?? this.options.weave_atlas;
+    const forcedSub = runOptions.substrate ?? this.options.substrate;
+    const bindsList =
+      runOptions.parameter_binds && runOptions.parameter_binds.length > 0
+        ? runOptions.parameter_binds
+        : [{}];
+
+    const tasks: Array<{
+      readonly circuit: QiskitCircuitDefinition;
+      readonly bindMap: Readonly<Record<string, number>>;
+      readonly seed: number;
+    }> = [];
+    let expIdx = 0;
+    for (const circuit of circuits) {
+      const targetCheck = verifyQiskitTargetUnbounded({
+        hasArbitraryQubitCeiling: false,
+        requestedQubits: circuit.numQubits,
+        shots,
+      });
+      if (!targetCheck.ok) {
+        throw new Error(`${targetCheck.error.kind}: ${targetCheck.error.detail}`);
+      }
+      const validCheck = validateQiskitCircuitAgainstTarget(circuit, this.target);
+      if (!validCheck.ok) {
+        throw new Error(`${validCheck.error.kind}: ${validCheck.error.detail}`);
+      }
+      for (const bindMap of bindsList) {
+        tasks.push({
+          circuit,
+          bindMap,
+          seed: (baseSeed + expIdx * 7919) >>> 0,
+        });
+        expIdx += 1;
+      }
+    }
+
+    const hostEnv = detectHostEnvironment();
+    const effectiveCores = runOptions.detected_cores_override ?? hostEnv.logicalCores;
+    const plannedLanes = planHostLaneSaturation(effectiveCores, tasks.length).activeLanes;
+    const { results: expResults, saturationPlan } = await saturateHostParallelAsync(
+      tasks,
+      (task) =>
+        this.executeSingleExperiment(task.circuit, task.bindMap, {
+          shots,
+          seed: task.seed,
+          memory: recordMemory,
+          prismFusion: useFusion,
+          forcedSubstrate: forcedSub,
+          weaveAtlas,
+          hostLogicalCpus: effectiveCores,
+          parallelLanesSaturated: plannedLanes,
+        }),
+      effectiveCores,
+    );
+
+    const jobDigest = blake3Hex(
+      new TextEncoder().encode(
+        JSON.stringify({
+          backend: this.name,
+          shots,
+          seed: baseSeed,
+          results: expResults.map((r) => [r.header.name, r.data.counts, r.metadata.holo_kappa]),
+        }),
+      ),
+    );
+    const jobId = `vdnt-job-${jobDigest.slice(0, 24)}`;
+    return {
+      job: new VerdantAqmJob(
+        jobId,
+        new VerdantAqmResult({
+          backendName: this.name,
+          backendVersion: this.backend_version,
+          jobId,
+          results: expResults,
+        }),
+      ),
+      saturationPlan,
+    };
+  }
+
   /** Computes the exact pre-measurement state representation for analytical `EstimatorV2` or zero-noise distribution */
   public evaluateExactState(
     circuitInput: QiskitCircuitDefinition | QuantumCircuitBuilder,
@@ -1801,6 +2107,7 @@ export class VerdantAqmBackend {
     sparseState: SparseComplexMap | null;
     wireToCompact: ReadonlyMap<number, number> | null;
     mpsState: ExactMpsState | null;
+    productState: DisjointProductState | null;
     circuit: QiskitCircuitDefinition;
     fusionEliminated: number;
   } {
@@ -1827,9 +2134,38 @@ export class VerdantAqmBackend {
         sparseState: null,
         wireToCompact: null,
         mpsState: null,
+        productState: null,
         circuit: { ...circuit, instructions: unitaryInstructions },
         fusionEliminated: 0,
       };
+    }
+
+    if (this.options.substrate !== 'ExactMps') {
+      const productState = evaluateDisjointProductSubsystems(
+        unitaryInstructions,
+        circuit.numQubits,
+        bindings,
+        route.isPureClifford,
+        route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum',
+        this.options.prism_fusion,
+      );
+      if (productState !== null) {
+        const subName: VerdantQiskitSubstrate =
+          chosenSubstrate === 'AtlasHolospace'
+            ? 'AtlasHolospace'
+            : route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum'
+              ? 'CyclotomicExact'
+              : 'ExactSparseContinuum';
+        return {
+          substrate: subName,
+          sparseState: null,
+          wireToCompact: null,
+          mpsState: null,
+          productState,
+          circuit,
+          fusionEliminated: productState.totalFusionEliminated,
+        };
+      }
     }
 
     if (chosenSubstrate === 'ExactMps' && route.isExactCyclotomic) {
@@ -1849,6 +2185,7 @@ export class VerdantAqmBackend {
         sparseState: null,
         wireToCompact: null,
         mpsState: mps,
+        productState: null,
         circuit,
         fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
       };
@@ -1883,6 +2220,7 @@ export class VerdantAqmBackend {
         sparseState: cyclotomicToSparseComplex(cyc),
         wireToCompact,
         mpsState: null,
+        productState: null,
         circuit,
         fusionEliminated: fused.ok ? fused.gatesEliminated : 0,
       };
@@ -1898,6 +2236,7 @@ export class VerdantAqmBackend {
       sparseState: sparse,
       wireToCompact,
       mpsState: null,
+      productState: null,
       circuit,
       fusionEliminated: 0,
     };
@@ -1913,11 +2252,13 @@ export class VerdantAqmBackend {
       prismFusion: boolean;
       forcedSubstrate: 'auto' | VerdantQiskitSubstrate;
       weaveAtlas: boolean;
+      hostLogicalCpus?: number;
+      parallelLanesSaturated?: number;
     },
   ): QiskitExperimentResult {
     const rng = createSeededRng(cfg.seed);
     const route = selectOptimalQiskitSubstrate(circuit, bindings);
-    const chosenSubstrate: VerdantQiskitSubstrate =
+    let chosenSubstrate: VerdantQiskitSubstrate =
       cfg.forcedSubstrate === 'auto' ? route.substrate : cfg.forcedSubstrate;
 
     // Split circuit into unitary prefix + terminal measurement map if no mid-circuit ops follow measurement/reset!
@@ -1941,6 +2282,8 @@ export class VerdantAqmBackend {
     let fusionEliminated = 0;
     let normExactOne = true;
     let skResidual: number | undefined;
+    let subsystemComponents: number | undefined;
+    let disjointTensorFactorized: boolean | undefined;
 
     // Unbounded SkWeaver topological compilation across unique single-qubit continuous rotations (zero qubit ceiling!)
     if (cfg.weaveAtlas || chosenSubstrate === 'AtlasHolospace') {
@@ -2021,6 +2364,7 @@ export class VerdantAqmBackend {
       const measureOps = tailInstructions.filter(
         (i) => (ISA_ALIAS_MAP[i.name.toLowerCase()] ?? i.name.toLowerCase()) === 'measure',
       );
+      let disjointProductCandidate: DisjointProductState | null = null;
 
       if (chosenSubstrate === 'StabilizerTableau' && route.isPureClifford) {
         const rawSteps = decomposeExactQiskitUnitaryPrefix(prefixInstructions, bindings);
@@ -2102,6 +2446,133 @@ export class VerdantAqmBackend {
             recordBitstringShot(clbits);
           }
           if (frame.numCoins > 12) {
+            for (const [k, cnt] of Object.entries(formattedCounts)) {
+              probabilities[k] = cnt / cfg.shots;
+            }
+          }
+        }
+      } else if (
+        cfg.forcedSubstrate !== 'ExactMps' &&
+        (disjointProductCandidate = evaluateDisjointProductSubsystems(
+          prefixInstructions,
+          circuit.numQubits,
+          bindings,
+          route.isPureClifford,
+          route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum',
+          cfg.prismFusion,
+        )) !== null
+      ) {
+        const prodState = disjointProductCandidate;
+        chosenSubstrate =
+          chosenSubstrate === 'AtlasHolospace'
+            ? 'AtlasHolospace'
+            : route.isExactCyclotomic && chosenSubstrate !== 'ExactSparseContinuum'
+              ? 'CyclotomicExact'
+              : 'ExactSparseContinuum';
+        activeKets = prodState.totalActiveKets;
+        fusionEliminated = prodState.totalFusionEliminated;
+        normExactOne = prodState.normExactOne;
+        subsystemComponents = prodState.subsystems.length;
+        disjointTensorFactorized = true;
+
+        if (measureOps.length > 0 && circuit.numClbits > 0) {
+          const touchedCompIds = new Set<number>();
+          for (const mOp of measureOps) {
+            const loc = prodState.wireToComponent.get(mOp.qubits[0]);
+            if (loc) touchedCompIds.add(loc.compIdx);
+          }
+
+          const compSamplers = Array.from(touchedCompIds)
+            .sort((a, b) => a - b)
+            .map((compIdx) => {
+              const sub = prodState.subsystems[compIdx];
+              const sortedEntries = [...sub.sparseState.entries()].sort((a, b) =>
+                a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+              );
+              const kets = new Array<bigint>(sortedEntries.length);
+              const probs = new Float64Array(sortedEntries.length);
+              const cumProbs = new Float64Array(sortedEntries.length);
+              let acc = 0;
+              for (let i = 0; i < sortedEntries.length; i += 1) {
+                const [ket, [re, im]] = sortedEntries[i];
+                const p = re * re + im * im;
+                kets[i] = ket;
+                probs[i] = p;
+                acc += p;
+                cumProbs[i] = acc;
+              }
+              if (cumProbs.length > 0) {
+                cumProbs[cumProbs.length - 1] = Math.max(1.0, acc);
+              }
+              return { compIdx, kets, probs, cumProbs };
+            });
+
+          const measLookup = measureOps.map((mOp) => {
+            const loc = prodState.wireToComponent.get(mOp.qubits[0]);
+            return {
+              clbit: mOp.clbits![0],
+              compIdx: loc ? loc.compIdx : -1,
+              localMask: loc ? 1n << BigInt(loc.localWire) : 0n,
+            };
+          });
+
+          const sampledCompKet = new Map<number, bigint>();
+          for (let s = 0; s < cfg.shots; s += 1) {
+            for (const cs of compSamplers) {
+              if (cs.cumProbs.length === 0) {
+                sampledCompKet.set(cs.compIdx, 0n);
+                continue;
+              }
+              const u = rng();
+              let lo = 0;
+              let hi = cs.cumProbs.length - 1;
+              while (lo < hi) {
+                const mid = (lo + hi) >>> 1;
+                if (u <= cs.cumProbs[mid]) hi = mid;
+                else lo = mid + 1;
+              }
+              sampledCompKet.set(cs.compIdx, cs.kets[lo]);
+            }
+            const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+            for (const ml of measLookup) {
+              if (ml.compIdx >= 0) {
+                const ket = sampledCompKet.get(ml.compIdx) ?? 0n;
+                clbits[ml.clbit] = (ket & ml.localMask) !== 0n ? 1 : 0;
+              } else {
+                clbits[ml.clbit] = 0;
+              }
+            }
+            recordBitstringShot(clbits);
+          }
+
+          let cartesianSize = 1;
+          for (const cs of compSamplers) {
+            cartesianSize *= Math.max(1, cs.kets.length);
+            if (cartesianSize > 4096) break;
+          }
+          if (cartesianSize <= 4096) {
+            const enumerateCartesian = (idx: number, curProb: number) => {
+              if (curProb <= 1e-16) return;
+              if (idx === compSamplers.length) {
+                const clbits = new Array<0 | 1>(circuit.numClbits).fill(0);
+                for (const ml of measLookup) {
+                  if (ml.compIdx >= 0) {
+                    const ket = sampledCompKet.get(ml.compIdx) ?? 0n;
+                    clbits[ml.clbit] = (ket & ml.localMask) !== 0n ? 1 : 0;
+                  }
+                }
+                const fmt = formatQiskitClassicalBitstring(clbits, circuit.cregs);
+                probabilities[fmt] = (probabilities[fmt] ?? 0) + curProb;
+                return;
+              }
+              const cs = compSamplers[idx];
+              for (let kIdx = 0; kIdx < cs.kets.length; kIdx += 1) {
+                sampledCompKet.set(cs.compIdx, cs.kets[kIdx]);
+                enumerateCartesian(idx + 1, curProb * cs.probs[kIdx]);
+              }
+            };
+            enumerateCartesian(0, 1.0);
+          } else {
             for (const [k, cnt] of Object.entries(formattedCounts)) {
               probabilities[k] = cnt / cfg.shots;
             }
@@ -2429,6 +2900,16 @@ export class VerdantAqmBackend {
         norm_exact_one: normExactOne,
         holo_kappa: holoKappa,
         ...(skResidual !== undefined ? { sk_weaver_max_residual: skResidual } : {}),
+        ...(cfg.hostLogicalCpus !== undefined ? { host_logical_cpus: cfg.hostLogicalCpus } : {}),
+        ...(cfg.parallelLanesSaturated !== undefined
+          ? { parallel_lanes_saturated: cfg.parallelLanesSaturated }
+          : {}),
+        ...(subsystemComponents !== undefined
+          ? { subsystem_components: subsystemComponents }
+          : {}),
+        ...(disjointTensorFactorized !== undefined
+          ? { disjoint_tensor_factorized: disjointTensorFactorized }
+          : {}),
       },
     };
   }
@@ -2582,6 +3063,8 @@ export interface EstimatorPubResult {
     readonly exact_analytical: boolean;
     readonly substrate: VerdantQiskitSubstrate;
     readonly holo_kappa: string;
+    readonly subsystem_components?: number;
+    readonly disjoint_tensor_factorized?: boolean;
   };
 }
 
@@ -2672,10 +3155,16 @@ export class VerdantAqmEstimatorV2 {
       const computedEvs: number[] = [];
       const computedStds: number[] = [];
       let lastSubstrate: VerdantQiskitSubstrate = 'CyclotomicExact';
+      let lastSubsystemComponents: number | undefined;
+      let lastDisjointFactorized: boolean | undefined;
 
       for (const bindMap of bindSweeps) {
         const stateEval = this.backend.evaluateExactState(circuit, bindMap);
         lastSubstrate = stateEval.substrate;
+        if (stateEval.productState !== null) {
+          lastSubsystemComponents = stateEval.productState.subsystems.length;
+          lastDisjointFactorized = true;
+        }
 
         for (const obs of obsList) {
           const terms = normalizeObservableTerms(obs);
@@ -2684,7 +3173,12 @@ export class VerdantAqmEstimatorV2 {
 
           for (const [pauliStr, coeff] of terms) {
             let termExp: number;
-            if (stateEval.mpsState !== null) {
+            if (stateEval.productState !== null) {
+              termExp = computeExactPauliExpectationDisjointSubsystems(
+                stateEval.productState,
+                pauliStr,
+              );
+            } else if (stateEval.mpsState !== null) {
               termExp = computeExactMpsPauliExpectation(stateEval.mpsState, pauliStr);
             } else if (stateEval.sparseState === null) {
               const stabExp = computeStabilizerPauliExpectation(stateEval.circuit, pauliStr, bindMap);
@@ -2734,6 +3228,12 @@ export class VerdantAqmEstimatorV2 {
           exact_analytical: precision === 0,
           substrate: lastSubstrate,
           holo_kappa: holoKappa,
+          ...(lastSubsystemComponents !== undefined
+            ? { subsystem_components: lastSubsystemComponents }
+            : {}),
+          ...(lastDisjointFactorized !== undefined
+            ? { disjoint_tensor_factorized: lastDisjointFactorized }
+            : {}),
         },
       });
     }
@@ -3314,6 +3814,11 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
     stdoutLines.push(
       `Circuit '${builtCircuit.name}': ${builtCircuit.numQubits} qubits, ${builtCircuit.numClbits} clbits | Active kets: ${exp.metadata.active_kets} | AQ-17 fused: ${exp.metadata.prism_fusion_eliminated}`,
     );
+    if (exp.metadata.disjoint_tensor_factorized) {
+      stdoutLines.push(
+        `Disjoint tensor-product factorization: ${exp.metadata.subsystem_components} unentangled subsystems`,
+      );
+    }
     if (exp.metadata.sk_weaver_max_residual !== undefined) {
       stdoutLines.push(
         `SkWeaver PU(22) max projective residual: ${exp.metadata.sk_weaver_max_residual.toExponential(4)}`,
@@ -3324,6 +3829,12 @@ export function executeQiskitNotebookCell(source: string): NotebookCellExecution
       const restored = VerdantAqmResult.fromUorcBytes(uorcBytes);
       stdoutLines.push(
         `UORC lossless custody round-trip: ${uorcBytes.byteLength} bytes verified (job_id=${restored.job_id})`,
+      );
+    }
+    if (/\bprove_host_saturation\s*\(/.test(source)) {
+      const cert = proveHostRooflineSaturation();
+      stdoutLines.push(
+        `Host Saturation Proof (${cert.host.logicalCores} cores, ${cert.saturationPlan.activeLanes} lanes): 512q=${cert.symplectic512qGatesPerSec} gates/s, 1000q_disjoint=${cert.disjoint1000qComponents} subsystems, kappa=${cert.proofKappa}`,
       );
     }
     stdoutLines.push(`Result.get_counts(): ${JSON.stringify(counts)}`);

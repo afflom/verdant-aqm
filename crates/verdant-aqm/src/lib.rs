@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod saturation;
 pub mod uorc;
 
 use std::collections::{BTreeMap, BTreeSet};

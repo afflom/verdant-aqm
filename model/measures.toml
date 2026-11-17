@@ -77,6 +77,23 @@ id = "QM-10"
 characteristic = "Maintainability"
 subcharacteristic = "Analysability & Modularity"
 metric = "Permanent zero-constants parametric ratchet ceilings (prism/parametric-ratchet/1)"
-pinned_threshold = "6/6 ceilings = 0 across 10 .lex.tex modules and crates/verdant-aqm/src/**/*.rs; 6/6 planted violations refused"
+pinned_threshold = "6/6 ceilings = 0 across 10 .lex.tex modules and crates/verdant-aqm/src/**/*.rs; 8/8 planted violations refused"
 evidence = "AQ-23, Quantum::inv015ParametricRatchetZeroCeilings, model/parametric-ratchet.toml"
+
+[[measures]]
+id = "QM-11"
+characteristic = "Performance efficiency"
+subcharacteristic = "Capacity & Resource utilization"
+metric = "Host compute lane saturation, DenialWins container grants, and 8-tier WorkloadOptimizationSpec"
+pinned_threshold = "activeLanes == min(detectedHostCores, workUnits) with 0 arbitrary concurrency caps; 8/8 zero-alloc & epoch-guarded tiers"
+evidence = "AQ-18, AQ-19, AQ-23, Quantum::inv017HostResourceSaturationAndStability, crates/verdant-aqm/src/saturation.rs"
+
+[[measures]]
+id = "QM-12"
+characteristic = "Reliability"
+subcharacteristic = "Maturity & Recoverability"
+metric = "Disjoint tensor-product circuit factorization, CSR 16x16 prefix-sum tile binning, and 15000 ms RPC watchdog"
+pinned_threshold = "O(components) exact local kets on unentangled non-Clifford blocks; 0 per-frame JS array allocs in CSR tiles; <= 2 in-flight worker frames"
+evidence = "AQ-09, AQ-15, AQ-19, AQ-20, Quantum::inv017HostResourceSaturationAndStability"
+
 

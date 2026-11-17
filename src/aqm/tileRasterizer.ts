@@ -5,7 +5,7 @@
  * warm/cool lighting + ACES filmic tonemapping identically on any CPU without WebGL2.
  */
 
-import { FOUR, ONE, SIXTEEN, THREE, TILE_EDGE_PX, TWO, ZERO } from './stratum0';
+import { FOUR, ONE, SIXTEEN, TEN, THREE, TILE_EDGE_PX, TWO, ZERO } from './stratum0';
 import { BlochVector, EntanglementEdge } from './types';
 import {
   PauliFault,
@@ -30,22 +30,73 @@ export interface TileRasterTelemetry {
   readonly tilesY: number;
   readonly activeTiles: number;
   readonly triangleCount: number;
+  readonly totalTileRefs: number;
+  readonly csrVerified: boolean;
+  readonly zeroPerFrameHeapAllocs: boolean;
 }
 
-interface ScreenTri {
-  x0: number;
-  y0: number;
-  z0: number;
-  x1: number;
-  y1: number;
-  z1: number;
-  x2: number;
-  y2: number;
-  z2: number;
-  invArea: number;
-  r: number;
-  g: number;
-  b: number;
+/**
+ * Persistent zero-allocation scratch pool for CSR `16x16` tile binning & SOA screen-triangle rasterization (`VE-35`).
+ */
+const csrScratch = {
+  zbuf: new Float32Array(ZERO),
+  tileCounts: new Int32Array(ZERO),
+  tileOffsets: new Int32Array(ZERO),
+  tileCursors: new Int32Array(ZERO),
+  tileTriIndices: new Int32Array(ZERO),
+  // Flat Structure-of-Arrays (SOA) for projected ScreenTris (10 floats + 3 RGB ints per triangle)
+  stFloats: new Float64Array(ZERO),
+  stColors: new Uint8Array(ZERO),
+  triBounds: new Int32Array(ZERO),
+};
+
+const SOA_FLOAT_STRIDE = TEN;
+const SOA_COLOR_STRIDE = THREE;
+
+function ensureScratchBuffers(pixelCount: number, totalTiles: number, maxTris: number): void {
+  if (csrScratch.zbuf.length < pixelCount) {
+    csrScratch.zbuf = new Float32Array(pixelCount);
+  }
+  if (csrScratch.tileCounts.length < totalTiles) {
+    csrScratch.tileCounts = new Int32Array(totalTiles);
+    csrScratch.tileCursors = new Int32Array(totalTiles);
+  }
+  if (csrScratch.tileOffsets.length < totalTiles + ONE) {
+    csrScratch.tileOffsets = new Int32Array(totalTiles + ONE);
+  }
+  const reqFloats = Math.max(ONE, maxTris) * SOA_FLOAT_STRIDE;
+  if (csrScratch.stFloats.length < reqFloats) {
+    csrScratch.stFloats = new Float64Array(reqFloats);
+    csrScratch.stColors = new Uint8Array(Math.max(ONE, maxTris) * SOA_COLOR_STRIDE);
+    csrScratch.triBounds = new Int32Array(Math.max(ONE, maxTris) * FOUR);
+  }
+}
+
+function ensureCsrIndexBuffer(totalRefs: number): void {
+  if (csrScratch.tileTriIndices.length < totalRefs) {
+    csrScratch.tileTriIndices = new Int32Array(Math.max(SIXTEEN, totalRefs * TWO));
+  }
+}
+
+/**
+ * Constructive verification of `Quantum::csrTilePrefixMonotonic`:
+ * `offsets[t] + counts[t] === offsets[t + 1]` for all `0 <= t < totalTiles`.
+ */
+export function verifyCsrTilePrefixMonotonic(
+  counts: Int32Array,
+  offsets: Int32Array,
+  totalTiles: number,
+  totalRefs: number,
+): boolean {
+  if (counts.length < totalTiles || offsets.length < totalTiles + ONE) {
+    return false;
+  }
+  for (let t = ZERO; t < totalTiles; t += ONE) {
+    if (offsets[t] + counts[t] !== offsets[t + ONE]) {
+      return false;
+    }
+  }
+  return offsets[totalTiles] === totalRefs;
 }
 
 function acesFilmic(x: number): number {
@@ -287,7 +338,7 @@ export function alignToTileEdge(dim: number): number {
 }
 
 /**
- * Renders 3D triangles into an RGBA `Uint8ClampedArray` via `16x16` tile-binned software PBR.
+ * Renders 3D triangles into an RGBA `Uint8ClampedArray` via zero-allocation flat CSR `16x16` tile-binned software PBR.
  */
 export function rasterizeQuantumSceneTiles(params: {
   width: number;
@@ -297,15 +348,24 @@ export function rasterizeQuantumSceneTiles(params: {
   distance: number;
   triangles: readonly SoftwareTriangle3D[];
   showTileGrid?: boolean;
+  outPixels?: Uint8ClampedArray;
 }): { pixels: Uint8ClampedArray; telemetry: TileRasterTelemetry } {
   const width = alignToTileEdge(params.width);
   const height = alignToTileEdge(params.height);
   const tilesX = width / TILE_EDGE_PX;
   const tilesY = height / TILE_EDGE_PX;
   const totalTiles = tilesX * tilesY;
+  const pixelCount = width * height;
+  const byteLen = pixelCount * FOUR;
 
-  const pixels = new Uint8ClampedArray(width * height * FOUR);
-  const zbuf = new Float32Array(width * height).fill(1e9);
+  const reusedFramebuffer =
+    params.outPixels !== undefined && params.outPixels.length === byteLen;
+  const pixels = reusedFramebuffer ? params.outPixels! : new Uint8ClampedArray(byteLen);
+
+  ensureScratchBuffers(pixelCount, totalTiles, params.triangles.length);
+  const { zbuf, tileCounts, tileOffsets, tileCursors, stFloats, stColors, triBounds } = csrScratch;
+  zbuf.fill(1e9, ZERO, pixelCount);
+  tileCounts.fill(ZERO, ZERO, totalTiles);
 
   for (let y = ZERO; y < height; y += ONE) {
     const t = y / Math.max(ONE, height - ONE);
@@ -350,33 +410,42 @@ export function rasterizeQuantumSceneTiles(params: {
 
   const fovScale = 1.45;
   const aspect = width / height;
+  const lightDirX = 0.52;
+  const lightDirY = 0.76;
+  const lightDirZ = 0.38;
 
-  const projectVertex = (v: readonly [number, number, number]): [number, number, number] | null => {
-    const dx = v[ZERO] - eyeX;
-    const dy = v[ONE] - eyeY;
-    const dz = v[TWO] - eyeZ;
-    const camZ = dx * fx + dy * fy + dz * fz;
-    if (camZ <= 0.25) return null;
-    const camX = dx * rx + dy * ry + dz * rz;
-    const camY = dx * ux + dy * uy + dz * uz;
-    const ndcX = (camX * fovScale) / (camZ * aspect);
-    const ndcY = (camY * fovScale) / camZ;
-    const sx = (ndcX * 0.5 + 0.5) * width;
-    const sy = (0.5 - ndcY * 0.5) * height;
-    return [sx, sy, camZ];
-  };
+  let stCount = ZERO;
 
-  const lightDir = [0.52, 0.76, 0.38];
-  const bins: number[][] = Array.from({ length: totalTiles }, () => []);
-  const screenTris: ScreenTri[] = [];
+  // Pass 1: Project triangles into flat SOA buffers and accumulate per-tile CSR counts
+  for (let tIdx = ZERO; tIdx < params.triangles.length; tIdx += ONE) {
+    const tri = params.triangles[tIdx];
 
-  for (const tri of params.triangles) {
-    const p0 = projectVertex(tri.v0);
-    const p1 = projectVertex(tri.v1);
-    const p2 = projectVertex(tri.v2);
-    if (!p0 || !p1 || !p2) continue;
+    const d0x = tri.v0[ZERO] - eyeX;
+    const d0y = tri.v0[ONE] - eyeY;
+    const d0z = tri.v0[TWO] - eyeZ;
+    const z0 = d0x * fx + d0y * fy + d0z * fz;
+    if (z0 <= 0.25) continue;
 
-    const area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
+    const d1x = tri.v1[ZERO] - eyeX;
+    const d1y = tri.v1[ONE] - eyeY;
+    const d1z = tri.v1[TWO] - eyeZ;
+    const z1 = d1x * fx + d1y * fy + d1z * fz;
+    if (z1 <= 0.25) continue;
+
+    const d2x = tri.v2[ZERO] - eyeX;
+    const d2y = tri.v2[ONE] - eyeY;
+    const d2z = tri.v2[TWO] - eyeZ;
+    const z2 = d2x * fx + d2y * fy + d2z * fz;
+    if (z2 <= 0.25) continue;
+
+    const p0x = (((d0x * rx + d0y * ry + d0z * rz) * fovScale) / (z0 * aspect) * 0.5 + 0.5) * width;
+    const p0y = (0.5 - (((d0x * ux + d0y * uy + d0z * uz) * fovScale) / z0) * 0.5) * height;
+    const p1x = (((d1x * rx + d1y * ry + d1z * rz) * fovScale) / (z1 * aspect) * 0.5 + 0.5) * width;
+    const p1y = (0.5 - (((d1x * ux + d1y * uy + d1z * uz) * fovScale) / z1) * 0.5) * height;
+    const p2x = (((d2x * rx + d2y * ry + d2z * rz) * fovScale) / (z2 * aspect) * 0.5 + 0.5) * width;
+    const p2y = (0.5 - (((d2x * ux + d2y * uy + d2z * uz) * fovScale) / z2) * 0.5) * height;
+
+    const area = (p1x - p0x) * (p2y - p0y) - (p1y - p0y) * (p2x - p0x);
     if (Math.abs(area) < 0.5) continue;
 
     const e1x = tri.v1[0] - tri.v0[0];
@@ -393,7 +462,7 @@ export function rasterizeQuantumSceneTiles(params: {
     ny /= nLen;
     nz /= nLen;
 
-    const ndl = Math.max(0, nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]);
+    const ndl = Math.max(0, nx * lightDirX + ny * lightDirY + nz * lightDirZ);
     const hemi = 0.24 + 0.18 * (ny * 0.5 + 0.5);
     const spec = (ONE - tri.roughness) * Math.pow(ndl, SIXTEEN) * 0.45;
     const linR = tri.color[0] * (hemi * 0.85 + ndl * 1.15 + tri.emissive) + spec;
@@ -404,42 +473,97 @@ export function rasterizeQuantumSceneTiles(params: {
     const sG = Math.round(Math.pow(acesFilmic(linG), 1 / 2.2) * 255);
     const sB = Math.round(Math.pow(acesFilmic(linB), 1 / 2.2) * 255);
 
-    const stIdx = screenTris.length;
-    if (area > 0) {
-      screenTris.push({
-        x0: p0[0], y0: p0[1], z0: p0[2],
-        x1: p1[0], y1: p1[1], z1: p1[2],
-        x2: p2[0], y2: p2[1], z2: p2[2],
-        invArea: 1 / area,
-        r: sR, g: sG, b: sB,
-      });
-    } else {
-      screenTris.push({
-        x0: p0[0], y0: p0[1], z0: p0[2],
-        x1: p2[0], y1: p2[1], z1: p2[2],
-        x2: p1[0], y2: p1[1], z2: p1[2],
-        invArea: -1 / area,
-        r: sR, g: sG, b: sB,
-      });
-    }
+    const fBase = stCount * SOA_FLOAT_STRIDE;
+    const cBase = stCount * SOA_COLOR_STRIDE;
+    const bBase = stCount * FOUR;
 
-    const minTx = Math.max(ZERO, Math.floor(Math.min(p0[0], p1[0], p2[0]) / TILE_EDGE_PX));
-    const maxTx = Math.min(tilesX - ONE, Math.floor(Math.max(p0[0], p1[0], p2[0]) / TILE_EDGE_PX));
-    const minTy = Math.max(ZERO, Math.floor(Math.min(p0[1], p1[1], p2[1]) / TILE_EDGE_PX));
-    const maxTy = Math.min(tilesY - ONE, Math.floor(Math.max(p0[1], p1[1], p2[1]) / TILE_EDGE_PX));
+    stFloats[fBase] = p0x;
+    stFloats[fBase + 1] = p0y;
+    stFloats[fBase + 2] = z0;
+    if (area > 0) {
+      stFloats[fBase + 3] = p1x;
+      stFloats[fBase + 4] = p1y;
+      stFloats[fBase + 5] = z1;
+      stFloats[fBase + 6] = p2x;
+      stFloats[fBase + 7] = p2y;
+      stFloats[fBase + 8] = z2;
+      stFloats[fBase + 9] = 1 / area;
+    } else {
+      stFloats[fBase + 3] = p2x;
+      stFloats[fBase + 4] = p2y;
+      stFloats[fBase + 5] = z2;
+      stFloats[fBase + 6] = p1x;
+      stFloats[fBase + 7] = p1y;
+      stFloats[fBase + 8] = z1;
+      stFloats[fBase + 9] = -1 / area;
+    }
+    stColors[cBase] = sR;
+    stColors[cBase + ONE] = sG;
+    stColors[cBase + TWO] = sB;
+
+    const minTx = Math.max(ZERO, Math.floor(Math.min(p0x, p1x, p2x) / TILE_EDGE_PX));
+    const maxTx = Math.min(tilesX - ONE, Math.floor(Math.max(p0x, p1x, p2x) / TILE_EDGE_PX));
+    const minTy = Math.max(ZERO, Math.floor(Math.min(p0y, p1y, p2y) / TILE_EDGE_PX));
+    const maxTy = Math.min(tilesY - ONE, Math.floor(Math.max(p0y, p1y, p2y) / TILE_EDGE_PX));
+
+    triBounds[bBase] = minTx;
+    triBounds[bBase + ONE] = maxTx;
+    triBounds[bBase + TWO] = minTy;
+    triBounds[bBase + THREE] = maxTy;
 
     for (let ty = minTy; ty <= maxTy; ty += ONE) {
+      const rowOff = ty * tilesX;
       for (let tx = minTx; tx <= maxTx; tx += ONE) {
-        bins[ty * tilesX + tx].push(stIdx);
+        tileCounts[rowOff + tx] += ONE;
+      }
+    }
+    stCount += ONE;
+  }
+
+  // Pass 2: Prefix-sum CSR offsets (`csrTilePrefixMonotonic`) and scatter flat triangle indices
+  let totalTileRefs = ZERO;
+  for (let t = ZERO; t < totalTiles; t += ONE) {
+    tileOffsets[t] = totalTileRefs;
+    tileCursors[t] = totalTileRefs;
+    totalTileRefs += tileCounts[t];
+  }
+  tileOffsets[totalTiles] = totalTileRefs;
+
+  ensureCsrIndexBuffer(totalTileRefs);
+  const { tileTriIndices } = csrScratch;
+
+  for (let stIdx = ZERO; stIdx < stCount; stIdx += ONE) {
+    const bBase = stIdx * FOUR;
+    const minTx = triBounds[bBase];
+    const maxTx = triBounds[bBase + ONE];
+    const minTy = triBounds[bBase + TWO];
+    const maxTy = triBounds[bBase + THREE];
+    for (let ty = minTy; ty <= maxTy; ty += ONE) {
+      const rowOff = ty * tilesX;
+      for (let tx = minTx; tx <= maxTx; tx += ONE) {
+        const tileId = rowOff + tx;
+        const slot = tileCursors[tileId];
+        tileTriIndices[slot] = stIdx;
+        tileCursors[tileId] = slot + ONE;
       }
     }
   }
 
+  const csrVerified = verifyCsrTilePrefixMonotonic(
+    tileCounts,
+    tileOffsets,
+    totalTiles,
+    totalTileRefs,
+  );
+
+  // Pass 3: Rasterize each active 16x16 CSR tile
   let activeTiles = ZERO;
   for (let ty = ZERO; ty < tilesY; ty += ONE) {
     for (let tx = ZERO; tx < tilesX; tx += ONE) {
-      const bucket = bins[ty * tilesX + tx];
-      if (bucket.length === ZERO) continue;
+      const tileId = ty * tilesX + tx;
+      const startRef = tileOffsets[tileId];
+      const endRef = tileOffsets[tileId + ONE];
+      if (startRef === endRef) continue;
       activeTiles += ONE;
 
       const xStart = tx * TILE_EDGE_PX;
@@ -447,32 +571,49 @@ export function rasterizeQuantumSceneTiles(params: {
       const xEnd = xStart + TILE_EDGE_PX;
       const yEnd = yStart + TILE_EDGE_PX;
 
-      for (const triIdx of bucket) {
-        const st = screenTris[triIdx];
-        const minX = Math.max(xStart, Math.floor(Math.min(st.x0, st.x1, st.x2)));
-        const maxX = Math.min(xEnd - ONE, Math.ceil(Math.max(st.x0, st.x1, st.x2)));
-        const minY = Math.max(yStart, Math.floor(Math.min(st.y0, st.y1, st.y2)));
-        const maxY = Math.min(yEnd - ONE, Math.ceil(Math.max(st.y0, st.y1, st.y2)));
+      for (let refIdx = startRef; refIdx < endRef; refIdx += ONE) {
+        const triIdx = tileTriIndices[refIdx];
+        const fBase = triIdx * SOA_FLOAT_STRIDE;
+        const cBase = triIdx * SOA_COLOR_STRIDE;
+
+        const x0 = stFloats[fBase];
+        const y0 = stFloats[fBase + 1];
+        const z0 = stFloats[fBase + 2];
+        const x1 = stFloats[fBase + 3];
+        const y1 = stFloats[fBase + 4];
+        const z1 = stFloats[fBase + 5];
+        const x2 = stFloats[fBase + 6];
+        const y2 = stFloats[fBase + 7];
+        const z2 = stFloats[fBase + 8];
+        const invArea = stFloats[fBase + 9];
+        const rCol = stColors[cBase];
+        const gCol = stColors[cBase + ONE];
+        const bCol = stColors[cBase + TWO];
+
+        const minX = Math.max(xStart, Math.floor(Math.min(x0, x1, x2)));
+        const maxX = Math.min(xEnd - ONE, Math.ceil(Math.max(x0, x1, x2)));
+        const minY = Math.max(yStart, Math.floor(Math.min(y0, y1, y2)));
+        const maxY = Math.min(yEnd - ONE, Math.ceil(Math.max(y0, y1, y2)));
 
         for (let py = minY; py <= maxY; py += ONE) {
           const cy = py + 0.5;
           for (let px = minX; px <= maxX; px += ONE) {
             const cx = px + 0.5;
-            const w0 = (st.x2 - st.x1) * (cy - st.y1) - (st.y2 - st.y1) * (cx - st.x1);
-            const w1 = (st.x0 - st.x2) * (cy - st.y2) - (st.y0 - st.y2) * (cx - st.x2);
-            const w2 = (st.x1 - st.x0) * (cy - st.y0) - (st.y1 - st.y0) * (cx - st.x0);
+            const w0 = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1);
+            const w1 = (x0 - x2) * (cy - y2) - (y0 - y2) * (cx - x2);
+            const w2 = (x1 - x0) * (cy - y0) - (y1 - y0) * (cx - x0);
             if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-              const b0 = w0 * st.invArea;
-              const b1 = w1 * st.invArea;
-              const b2 = w2 * st.invArea;
-              const z = b0 * st.z0 + b1 * st.z1 + b2 * st.z2;
+              const b0 = w0 * invArea;
+              const b1 = w1 * invArea;
+              const b2 = w2 * invArea;
+              const z = b0 * z0 + b1 * z1 + b2 * z2;
               const pixIdx = py * width + px;
               if (z < zbuf[pixIdx]) {
                 zbuf[pixIdx] = z;
                 const off = pixIdx * FOUR;
-                pixels[off] = st.r;
-                pixels[off + ONE] = st.g;
-                pixels[off + TWO] = st.b;
+                pixels[off] = rCol;
+                pixels[off + ONE] = gCol;
+                pixels[off + TWO] = bCol;
               }
             }
           }
@@ -501,7 +642,11 @@ export function rasterizeQuantumSceneTiles(params: {
       tilesX,
       tilesY,
       activeTiles,
-      triangleCount: screenTris.length,
+      triangleCount: stCount,
+      totalTileRefs,
+      csrVerified,
+      zeroPerFrameHeapAllocs: reusedFramebuffer,
     },
   };
 }
+

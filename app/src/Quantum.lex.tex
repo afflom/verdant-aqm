@@ -481,6 +481,88 @@ theorem{
   axioms: []
 }
 
+definition{
+  name: natTwoFiftySix,
+  parameters: [],
+  result: Nat,
+  body: (Foundation.Ontology.V1.Model::pow2Constructive (natEight))
+}
+
+definition{
+  name: csrTilePrefixMonotonic,
+  parameters: [offsetCur : Nat, offsetNext : Nat, tileCount : Nat],
+  result: Bool,
+  body: ((offsetCur + tileCount) =? offsetNext),
+  axioms: []
+}
+
+definition{
+  name: epochElisionAdmissible,
+  parameters: [syncedEpoch : Nat, currentEpoch : Nat, forceRebuild : Bool],
+  result: Bool,
+  body: ((not forceRebuild) && (syncedEpoch =? currentEpoch)),
+  axioms: []
+}
+
+definition{
+  name: workerInFlightAdmissible,
+  parameters: [inFlightFrames : Nat],
+  result: Bool,
+  body: (inFlightFrames <=? (natTwo)),
+  axioms: []
+}
+
+definition{
+  name: watchdogWithinBound,
+  parameters: [elapsedMillis : Nat, maxTimeoutMillis : Nat],
+  result: Bool,
+  body: (elapsedMillis <=? maxTimeoutMillis),
+  axioms: []
+}
+
+definition{
+  name: gpuContextHealthy,
+  parameters: [contextLost : Bool, dimensionsValid : Bool],
+  result: Bool,
+  body: ((not contextLost) && dimensionsValid),
+  axioms: []
+}
+
+definition{
+  name: hostLaneSaturationOptimal,
+  parameters: [detectedCores : Nat, workUnits : Nat, activeLanes : Nat],
+  result: Bool,
+  body: (((0 <? detectedCores) && (0 <? workUnits))
+    && (if (detectedCores <=? workUnits)
+      then (activeLanes =? detectedCores)
+      else (activeLanes =? workUnits))),
+  axioms: []
+}
+
+definition{
+  name: disjointSubsystemFactorizationValid,
+  parameters: [globalQubits : Nat, componentCount : Nat, maxComponentQubits : Nat],
+  result: Bool,
+  body: (((natOne) <=? componentCount)
+    && ((maxComponentQubits <=? globalQubits)
+      && (componentCount <=? globalQubits))),
+  axioms: []
+}
+
+theorem{
+  name: inv017HostResourceSaturationAndStability,
+  statement: (((((csrTilePrefixMonotonic (natSixteen) ((natSixteen) + (natEight)) (natEight)) = true)
+    ∧ ((csrTilePrefixMonotonic (natSixteen) (natSixteen) (natOne)) = false))
+    ∧ (((epochElisionAdmissible (natEight) (natEight) false) = true)
+      ∧ ((epochElisionAdmissible (natEight) (natEight) true) = false)))
+    ∧ ((((workerInFlightAdmissible (natTwo)) = true)
+      ∧ ((workerInFlightAdmissible (natThree)) = false))
+      ∧ (((hostLaneSaturationOptimal (natSixteen) (natSixtyFour) (natSixteen)) = true)
+        ∧ ((hostLaneSaturationOptimal (natSixteen) (natFour) (natSixteen)) = false)))),
+  proof: decide{},
+  axioms: []
+}
+
 \end{semanticmodule}
 \end{lexlean}
 
